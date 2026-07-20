@@ -1,0 +1,124 @@
+# JobBot 平台配置
+# 每个平台可独立启用/禁用，调整搜索规则
+
+boss_zhipin:
+  enabled: true
+  name: "BOSS直聘"
+  base_url: "https://www.zhipin.com"
+
+  # ===== 搜索关键词（留空 = 由 JobBot 从简历自动生成）=====
+  search_keywords: []
+  location: "南京"
+  city_code: "101190100"
+
+  # ===== 筛选器参数 =====
+  # 求职类型：实习=1902，全职=（留空），不限制=（留空）
+  job_type: ""
+  # 学历要求：大专=202，不限=203，本科=203
+  degree: ""
+
+  # ===== 标题过滤 =====
+  # positive: 标题必须包含至少一个（空=不限制）
+  # negative: 标题包含任意一个 → 直接跳过
+  title_filter:
+    positive: []
+    negative:
+      - "销售"
+      - "保险"
+      - "客服"
+      - "Java"
+      - "PHP"
+      - "Python"
+      - "前端"
+      - ".NET"
+      - "Android"
+      - "iOS"
+      - "算法"
+      - "大数据"
+      - "架构师"
+      - "总监"
+      - "经理"
+
+  # ===== 薪资过滤 =====
+  salary_filter:
+    min: 2000       # 最低月薪（低于此跳过）
+    max: 0          # 0 = 无上限
+
+  # ===== 学历过滤 =====
+  # 允许的学历标签（空=不限制），常见："大专""中专""不限""学历不限"
+  education_allow: []
+
+  # ===== 信任检测 =====
+  trust_filter:
+    enabled: true
+    suspicious_keywords:
+      - "在家办公"
+      - "日结"
+      - "押金"
+      - "培训费"
+      - "先交"
+      - "刷单"
+      - "兼职"
+      - "微商"
+      - "代理"
+      - "投资"
+      - "理财"
+      - "虚拟币"
+      - "区块链"
+    high_risk_keywords:
+      - "日入"
+      - "月入过万"
+      - "躺赚"
+      - "带你赚钱"
+    salary_ceiling: 15000    # 薪资超过此值触发虚高检测
+
+# ===== 前程无忧（51job）=====
+wuyou:
+  enabled: true
+  name: "前程无忧"
+  base_url: "https://we.51job.com"
+  login_url: "https://login.51job.com/login.php?lang=c"
+
+  search_keywords: []
+  location: "南京"
+  city_code: "070200"
+
+  title_filter:
+    positive: []
+    negative:
+      - "销售"
+      - "保险"
+      - "客服"
+      - "Java"
+      - "PHP"
+      - "Python"
+      - "前端"
+      - ".NET"
+
+  salary_filter:
+    min: 2000
+    max: 0
+
+  trust_filter:
+    enabled: true
+    suspicious_keywords:
+      - "在家办公"
+      - "日结"
+      - "押金"
+      - "培训费"
+
+# ===== 实习僧 =====
+shixiseng:
+  enabled: true
+  name: "实习僧"
+  base_url: "https://www.shixiseng.com"
+
+  search_keywords: []
+  location: "南京"
+
+  title_filter:
+    positive: []
+    negative: ["销售", "客服"]
+
+  trust_filter:
+    enabled: true
