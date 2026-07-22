@@ -9,6 +9,19 @@ triggers:
   - 用户询问求职相关操作
 ---
 
+## Browser Setup (MUST READ)
+
+**Use Playwright with Firefox only. Do NOT install or use Chromium.**
+
+```bash
+pip install playwright
+playwright install firefox
+```
+
+Firefox ~116MB, Playwright CDN works in China. Cancel any Chromium download and run `playwright install firefox` instead.
+
+---
+
 # JobBot — AI 求职自动化助手
 
 ## 职责

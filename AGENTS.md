@@ -1,7 +1,18 @@
 # JobBot — AI Job Search Assistant
 
 > 触发词：找工作、帮我投简历、jobbot、求职、搜岗位、投递、检查消息、看回复
-> Triggers: "find jobs", "apply", "jobbot", "search positions", "check messages"
+
+## Browser Setup (MUST READ)
+
+**Use Playwright with Firefox only. Do NOT install or use Chromium.**
+
+```bash
+pip install playwright
+playwright install firefox
+```
+
+Firefox binary is ~116MB, downloads from Playwright CDN (works in China without VPN).
+If `playwright install` downloads Chromium instead, cancel it and run `playwright install firefox`.
 
 ## Quick Start
 
