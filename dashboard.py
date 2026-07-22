@@ -2,7 +2,7 @@
 """JobBot Dashboard — python dashboard.py → http://localhost:9379
 ponytail: stdlib HTTP server + single inline HTML, data via local JSON."""
 
-import http.server, json, os, sys, webbrowser, shutil
+import http.server, json, os, sys, shutil
 from pathlib import Path
 
 PORT = 9379
@@ -129,10 +129,18 @@ async function uploadResume(input){
   if(!input.files[0])return;
   const fd=new FormData();fd.append('file',input.files[0]);
   const r=await fetch('/api/upload',{method:'POST',body:fd});
-  const t=await r.text();
-  document.getElementById('resume-name').textContent=' ✅ '+input.files[0].name;
+  const d=await r.json();
+  document.getElementById('resume-name').textContent=' ✅ '+d._filename;
   document.getElementById('upload-area').style.borderColor='var(--good)';
-  toast(t);
+  // Auto-fill extracted fields
+  if(d.name) document.getElementById('cfg-name').value=d.name;
+  if(d.education) document.getElementById('cfg-edu').value=d.education;
+  if(d.major) document.getElementById('cfg-major').value=d.major;
+  if(d.cities) document.getElementById('cfg-city').value=d.cities[0];
+  if(d.skills) document.getElementById('cfg-skills').value=d.skills.join(',');
+  if(d.phone||d.email) document.getElementById('cfg-salary').placeholder='已提取联系方式';
+  const filled=Object.keys(d).filter(k=>k[0]!='_').length;
+  toast(filled?'✅ 简历解析完成，已自动填充 '+(filled-1)+' 项':'✅ 简历已保存（手动填写下方信息）');
 }
 async function saveConfig(){
   const cfg={
@@ -147,6 +155,9 @@ async function saveConfig(){
   };
   await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
   toast('✅ 配置已保存');
+  document.getElementById('stats-section').style.display='block';
+  document.getElementById('table-section').style.display='block';
+  document.getElementById('config-title').textContent='⚙️ 求职配置';
 }
 
 function render(){
@@ -219,9 +230,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     path = os.path.join(RESUME_DIR, fn)
                     with open(path, 'wb') as f:
                         f.write(data.rstrip(b'\r\n--'))
-                    self._text(f'已保存简历: {fn}')
+                    extracted = self._parse_resume(path)
+                    extracted['_filename'] = fn
+                    self._json(extracted)
                     return
-        self._text('上传失败', 400)
+        self._json({'_error': '上传失败'})
+
+    def _parse_resume(self, path):
+        import re
+        result = {}
+        try:
+            text = open(path, encoding='utf-8', errors='ignore').read()[:5000]
+        except:
+            text = open(path, encoding='gbk', errors='ignore').read()[:5000]
+        # Name: 3-4 Chinese chars after 姓名/名字
+        m = re.search(r'(?:姓名|名字)[:：\s]*([\u4e00-\u9fa5]{2,4})', text)
+        if m: result['name'] = m.group(1)
+        # Education
+        m = re.search(r'(?:学历|教育)[:：\s]*(大专|本科|硕士|博士|中专|高中)', text)
+        if m: result['education'] = m.group(1)
+        # Major
+        m = re.search(r'(?:专业)[:：\s]*([\u4e00-\u9fa5]{2,20})', text)
+        if m: result['major'] = m.group(1)
+        # City
+        m = re.search(r'(?:城市|地点|期望城市)[:：\s]*(北京|上海|广州|深圳|杭州|南京|成都|武汉|苏州|重庆|西安|天津|长沙|郑州)', text)
+        if m: result['cities'] = [m.group(1)]
+        # Phone
+        m = re.search(r'1[3-9]\d{9}', text)
+        if m: result['phone'] = m.group(0)
+        # Email
+        m = re.search(r'[\w.-]+@[\w.-]+', text)
+        if m: result['email'] = m.group(0)
+        # Skills: scan for known keywords
+        known = ['PLC','plc','CAD','Python','Java','C++','SQL','Excel','电工','自动化','电气','嵌入式','单片机','Linux','ROS','SolidWorks','西门子','三菱','ABB','PCB','FPGA','MATLAB','Office','PS','PR','AE']
+        found = [k for k in known if k.lower() in text.lower()]
+        if found: result['skills'] = found[:8]
+        return result
 
     def _read_data(self):
         try: return json.loads(DATA_FILE.read_text(encoding="utf-8", errors="ignore"))
@@ -246,5 +290,4 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     print(f'JobBot Dashboard → http://localhost:{PORT}', flush=True)
-    webbrowser.open(f'http://localhost:{PORT}')
     http.server.HTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
