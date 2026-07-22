@@ -16,23 +16,19 @@ If `playwright install` downloads Chromium instead, cancel it and run `playwrigh
 
 ## Quick Start
 
-If this is the first run (no `config/user_profile.json` yet), say:
-"你好！我是 JobBot 求职助手。请先告诉我你的基本信息：学历、专业、毕业年份、目标城市、目标岗位。或者直接把简历文件给我。"
+**On first run, launch the dashboard immediately. Do NOT ask for basic info in CLI.**
 
-Then follow the First-Time Setup below.
-
-**After configuration is saved, start the dashboard immediately:**
 ```bash
 python dashboard.py
 ```
-Then tell the user: "✅ 配置完成！打开浏览器访问 **http://localhost:9379** 查看看板和管理投递。"
 
-## First-Time Setup
+Then tell the user:
 
-If `config/user_profile.json` doesn't exist or is a template:
+> 🚀 JobBot Dashboard 已启动！
+> 打开浏览器访问 **http://localhost:9379**
+> 在页面上上传简历或填写求职信息，完成后说「准备好了」我开始搜索岗位。
 
-1. Ask the user for: name, education, major, graduation year, target cities, target job titles, skills, salary range
-2. Create `config/user_profile.json` from the template
+If the user hasn't configured yet (`config/user_profile.json` doesn't exist), the dashboard shows a config form with resume upload. Wait for the user to finish before searching.
 3. Generate 5-8 search keywords from their profile:
    - P0: preferred direction keywords first
    - P1: skill-based job title variants (e.g. "PLC" → "PLC调试", "PLC编程")
