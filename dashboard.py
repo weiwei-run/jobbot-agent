@@ -73,7 +73,7 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
   <label>意向描述（城市、学历、专业、目标岗位、技能…）</label>
   <textarea id=cfg-intent rows=4 placeholder="例：大专，电气自动化，2027毕业，找南京PLC调试或自动化实习，学过CAD和西门子PLC，有电工证，期望薪资3000-5000"></textarea>
   <div class=row>
-    <button onclick=saveConfig()>💾 保存配置</button>
+    <button onclick=saveConfig()>🚀 开始投递</button>
     <span style=font-size:12px;color:var(--good) id=cfg-saved></span>
   </div>
 </section>
@@ -118,9 +118,10 @@ async function uploadResume(input){
 async function saveConfig(){
   const cfg={intent:document.getElementById('cfg-intent').value};
   await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-  toast('✅ 配置已保存');
+  document.getElementById('config-section').style.display='none';
   document.getElementById('stats-section').style.display='block';
   document.getElementById('table-section').style.display='block';
+  toast('✅ 投递任务已启动');
 }
 
 function render(){
