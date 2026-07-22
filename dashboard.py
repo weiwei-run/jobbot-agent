@@ -65,22 +65,13 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
 
 <!-- Config: shown first when no profile -->
 <section id=config-section>
-  <h3 id=config-title>⚙️ 求职配置</h3>
+  <h3 id=config-title>🚀 第一步：填写求职信息</h3>
   <div id=upload-area style="border:2px dashed var(--border);border-radius:8px;padding:18px;text-align:center;cursor:pointer;margin-bottom:14px" onclick="document.getElementById('resume-file').click()">
     <input type=file id=resume-file accept=".pdf,.doc,.docx,.txt" style=display:none onchange="uploadResume(this)">
     📎 上传简历 (PDF/Word/TXT) <span id=resume-name style=color:var(--good)></span>
-    <div style=font-size:11px;color:#8b949e;margin-top:4px>或手动填写下方信息</div>
   </div>
-  <div class=col2>
-    <div><label>姓名</label><input type=text id=cfg-name></div>
-    <div><label>学历</label><input type=text id=cfg-edu placeholder=大专/本科/硕士></div>
-    <div><label>专业</label><input type=text id=cfg-major></div>
-    <div><label>毕业年份</label><input type=text id=cfg-grad placeholder=2027></div>
-    <div><label>目标城市</label><input type=text id=cfg-city placeholder=南京></div>
-    <div><label>薪资范围</label><input type=text id=cfg-salary placeholder=3000-6000></div>
-  </div>
-  <label>意向岗位（逗号分隔）</label><input type=text id=cfg-jobs placeholder="电气工程师,PLC调试,自动化技术员">
-  <label>技能（逗号分隔）</label><input type=text id=cfg-skills placeholder="PLC,电气控制,CAD,电工证">
+  <label>意向描述（城市、学历、专业、目标岗位、技能…）</label>
+  <textarea id=cfg-intent rows=4 placeholder="例：大专，电气自动化，2027毕业，找南京PLC调试或自动化实习，学过CAD和西门子PLC，有电工证，期望薪资3000-5000"></textarea>
   <div class=row>
     <button onclick=saveConfig()>💾 保存配置</button>
     <span style=font-size:12px;color:var(--good) id=cfg-saved></span>
@@ -108,21 +99,11 @@ async function loadData(){
 }
 async function loadConfig(){
   try{const r=await fetch('/api/config');config=await r.json()}catch(e){}
-  document.getElementById('cfg-name').value=config.name||'';
-  document.getElementById('cfg-edu').value=config.education||'';
-  document.getElementById('cfg-major').value=config.major||'';
-  document.getElementById('cfg-grad').value=config.graduate_year||'';
-  document.getElementById('cfg-city').value=(config.expected_cities||[''])[0]||'';
-  document.getElementById('cfg-salary').value=(config.expected_salary||['','']).join('-')||'';
-  document.getElementById('cfg-jobs').value=(config.expected_jobs||[]).join(',');
-  document.getElementById('cfg-skills').value=(config.skills||[]).join(',');
+  document.getElementById('cfg-intent').value=config.intent||config.requirements||'';
   // First-time: show config first
-  if(!config.name||config.name==='请填写姓名'){
+  if(!config.intent&&!config.requirements){
     document.getElementById('stats-section').style.display='none';
     document.getElementById('table-section').style.display='none';
-    document.getElementById('config-title').textContent='🚀 第一步：填写求职信息';
-  }else{
-    document.getElementById('config-title').textContent='⚙️ 求职配置';
   }
 }
 async function uploadResume(input){
@@ -132,32 +113,14 @@ async function uploadResume(input){
   const d=await r.json();
   document.getElementById('resume-name').textContent=' ✅ '+d._filename;
   document.getElementById('upload-area').style.borderColor='var(--good)';
-  // Auto-fill extracted fields
-  if(d.name) document.getElementById('cfg-name').value=d.name;
-  if(d.education) document.getElementById('cfg-edu').value=d.education;
-  if(d.major) document.getElementById('cfg-major').value=d.major;
-  if(d.cities) document.getElementById('cfg-city').value=d.cities[0];
-  if(d.skills) document.getElementById('cfg-skills').value=d.skills.join(',');
-  if(d.phone||d.email) document.getElementById('cfg-salary').placeholder='已提取联系方式';
-  const filled=Object.keys(d).filter(k=>k[0]!='_').length;
-  toast(filled?'✅ 简历解析完成，已自动填充 '+(filled-1)+' 项':'✅ 简历已保存（手动填写下方信息）');
+  toast('✅ 简历已保存');
 }
 async function saveConfig(){
-  const cfg={
-    name:document.getElementById('cfg-name').value,
-    education:document.getElementById('cfg-edu').value,
-    major:document.getElementById('cfg-major').value,
-    graduate_year:document.getElementById('cfg-grad').value,
-    expected_cities:[document.getElementById('cfg-city').value],
-    expected_salary:document.getElementById('cfg-salary').value.split('-').map(s=>parseInt(s)||0),
-    expected_jobs:document.getElementById('cfg-jobs').value.split(',').map(s=>s.trim()).filter(Boolean),
-    skills:document.getElementById('cfg-skills').value.split(',').map(s=>s.trim()).filter(Boolean)
-  };
+  const cfg={intent:document.getElementById('cfg-intent').value};
   await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
   toast('✅ 配置已保存');
   document.getElementById('stats-section').style.display='block';
   document.getElementById('table-section').style.display='block';
-  document.getElementById('config-title').textContent='⚙️ 求职配置';
 }
 
 function render(){
