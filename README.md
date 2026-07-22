@@ -1,7 +1,5 @@
 # JobBot Agent — 开源通用求职技能包
 
-> ⚠️ **这是通用版，零个人信息。** 加载后通过上传简历或输入意向来配置。弟弟专用版在隔壁 `jobbot/`。
-
 ## 定位
 
 一个可分发到任何 AI Agent（Hermes / OpenCode / Claude Code / OpenClaw）的技能包。
