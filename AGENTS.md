@@ -28,7 +28,7 @@ Step 2 — tell the user to open http://localhost:9379.
 > 打开浏览器访问 **http://localhost:9379**
 > 在页面上上传简历或填写求职信息，完成后说「准备好了」我开始搜索岗位。
 
-If the user hasn't configured yet (`config/user_profile.json` doesn't exist), the dashboard shows a config form with resume upload. Wait for the user to finish before searching.
+**After sending the above message, DO NOTHING until the user says "准备好了".** Then read `config/user_profile.json` and start searching.
 
 ## ⚠️ LOGIN RULE (non-negotiable)
 
