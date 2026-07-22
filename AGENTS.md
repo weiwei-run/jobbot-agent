@@ -16,13 +16,13 @@ If `playwright install` downloads Chromium instead, cancel it and run `playwrigh
 
 ## Quick Start
 
-**On first run, launch the dashboard immediately. Do NOT ask for basic info in CLI.**
+**Step 1 — run this command NOW, before replying:**
 
 ```bash
 python dashboard.py
 ```
 
-Then tell the user:
+Step 2 — tell the user to open http://localhost:9379.
 
 > 🚀 JobBot Dashboard 已启动！
 > 打开浏览器访问 **http://localhost:9379**
