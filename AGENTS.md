@@ -29,6 +29,10 @@ Then tell the user:
 > 在页面上上传简历或填写求职信息，完成后说「准备好了」我开始搜索岗位。
 
 If the user hasn't configured yet (`config/user_profile.json` doesn't exist), the dashboard shows a config form with resume upload. Wait for the user to finish before searching.
+
+## ⚠️ LOGIN RULE (non-negotiable)
+
+When any platform redirects to a login page: **STOP immediately. Do NOT try to bypass, fill verification codes, or switch browsers.** Tell the user "{平台} 需要登录，请手动操作，完成后告诉我「好了」". Wait for user confirmation before continuing.
 3. Generate 5-8 search keywords from their profile:
    - P0: preferred direction keywords first
    - P1: skill-based job title variants (e.g. "PLC" → "PLC调试", "PLC编程")
@@ -120,18 +124,6 @@ User reviews draft → says "发" or "OK" → send → verify delivery.
 After any state change, run `python scripts/report.py` to regenerate `data/dashboard.html`.
 
 Tell user: "看板已更新: {absolute_path_to_dashboard.html}"
-
-## Platform Login / Blocked
-
-If a platform needs login or CAPTCHA:
-1. Tell user: "XX平台需要登录/验证，我正在打开页面"
-2. Open the login page
-3. Wait for user: "好了"/"已登录"
-4. Continue
-
-If BOSS returns `{"message":"Your IP is blacklisted"}`:
-1. Tell user their IP is blocked by BOSS
-2. Options: wait (hours to days), switch network, or continue with other platforms
 
 ## Key Traps (Read Before Operating)
 
