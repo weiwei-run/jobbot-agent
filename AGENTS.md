@@ -21,6 +21,12 @@ If this is the first run (no `config/user_profile.json` yet), say:
 
 Then follow the First-Time Setup below.
 
+**After configuration is saved, start the dashboard immediately:**
+```bash
+python dashboard.py
+```
+Then tell the user: "✅ 配置完成！打开浏览器访问 **http://localhost:9379** 查看看板和管理投递。"
+
 ## First-Time Setup
 
 If `config/user_profile.json` doesn't exist or is a template:
