@@ -1,84 +1,85 @@
 #!/usr/bin/env python3
-"""JobBot 环境检测脚本 — 检查依赖是否就绪"""
+"""JobBot 环境检测 + 自动安装 — python scripts/setup.py"""
 
-import sys
-import subprocess
-import importlib.util
-import json
+import subprocess, sys, importlib.util, json
 from pathlib import Path
 
-CHECKS = []
+ROOT = Path(__file__).parent.parent
+DATA_DIR = ROOT / "data"
+CONFIG_FILE = ROOT / "config" / "user_profile.json"
+CONFIG_TEMPLATE = ROOT / "config" / "user_profile_template.json"
 
-def check(name, fn):
+print("JobBot 环境检测\n" + "=" * 50)
+
+ok_count = 0
+total = 0
+
+def step(name, fn):
+    global ok_count, total; total += 1
     try:
         ok, msg = fn()
     except Exception as e:
         ok, msg = False, str(e)
-    CHECKS.append({"name": name, "ok": ok, "message": msg})
-    status = "✅" if ok else "❌"
-    print(f"  {status} {name}: {msg}")
-    return ok
+    print(f"  {'✅' if ok else '❌'} {name}: {msg}")
+    if ok: ok_count += 1
 
-print("JobBot 环境检测\n" + "=" * 50)
+# Python
+step("Python >= 3.10", lambda: (sys.version_info >= (3, 10), sys.version.split()[0]))
 
-# Python version
-check("Python >= 3.10", lambda: (
-    sys.version_info >= (3, 10),
-    f"Python {sys.version}"
-))
+# Playwright pip
+pw_spec = importlib.util.find_spec("playwright")
+step("pip: playwright", lambda: (pw_spec is not None, "已安装" if pw_spec else "未安装"))
 
-# pip packages
-for pkg, import_name, desc in [
-    ("playwright", "playwright", "Playwright 浏览器自动化"),
-    ("httpx", "httpx", "HTTP 客户端"),
-    ("jinja2", "jinja2", "HTML 模板引擎"),
-]:
-    spec = importlib.util.find_spec(import_name)
-    check(f"pip: {pkg}", lambda s=spec, d=desc: (
-        s is not None,
-        d + (" (已安装)" if s else " (未安装 — pip install " + pkg + ")")
-    ))
+# Auto-install playwright if missing
+if pw_spec is None:
+    print("  → 正在安装 playwright...")
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], capture_output=True, text=True)
+    print(f"    {'✅' if r.returncode == 0 else '❌'} {r.stdout.strip()[-100:] if r.stdout else r.stderr.strip()[-100:]}")
 
-# Playwright browsers
-def check_pw_browsers():
+# Playwright Firefox browser
+def check_firefox():
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
-            browsers = [b["name"] for b in p.chromium.browsers if "name" in b]
-            if not browsers:
-                return False, "未找到 Chromium 浏览器 (运行: playwright install chromium)"
-            return True, f"已安装: {', '.join(browsers)}"
+            p.firefox.launch().close()
+            return True, "Firefox 已安装"
     except Exception as e:
-        return False, str(e)
+        msg = str(e)
+        if "doesn't exist" in msg:
+            return False, "Firefox 未安装 — 正在自动安装..."
+        return False, msg[:80]
 
-check("Playwright 浏览器", check_pw_browsers)
+step("Playwright Firefox", check_firefox)
 
-# Config files
-ROOT = Path(__file__).parent.parent
-for f, desc in [
-    ("config/user_profile.json", "用户简历"),
-    ("config/platforms.yml", "平台配置"),
-]:
-    path = ROOT / f
-    if str(path).startswith("config/") and Path("config/user_profile_template.json").exists():
-        check(desc, lambda p=ROOT/"config/user_profile_template.json": (
-            p.exists(),
-            "模板已就绪 (需重命名为 user_profile.json 并填写)"
-        ))
-        continue
+# Auto-install Firefox
+try:
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        try: p.firefox.launch().close()
+        except:
+            print("  → 正在下载 Firefox (~116MB)...")
+            r = subprocess.run([sys.executable, "-m", "playwright", "install", "firefox"], capture_output=True, text=True)
+            ok = r.returncode == 0
+            print(f"    {'✅' if ok else '❌'} Firefrox {'安装完成' if ok else '安装失败: '+r.stderr.strip()[-80:]}")
+except ImportError:
+    pass
 
-# Summary
-ok_count = sum(1 for c in CHECKS if c["ok"])
-total = len(CHECKS)
+# Config
+step("配置文件", lambda: (
+    CONFIG_FILE.exists() or CONFIG_TEMPLATE.exists(),
+    "就绪" if CONFIG_FILE.exists() else "模板就绪 (需重命名为 user_profile.json)"
+))
+
+# Data dir
+step("数据目录", lambda: (True, str(DATA_DIR)))
+
 print(f"\n{'=' * 50}")
 print(f"结果: {ok_count}/{total} 项通过")
 
-if ok_count < total:
-    print("\n请先修复 ❌ 项再使用 JobBot:")
-    for c in CHECKS:
-        if not c["ok"]:
-            print(f"  • {c['name']}: {c['message']}")
+if ok_count == total:
+    print("\n✅ 环境就绪！python dashboard.py 启动看板。")
 else:
-    print("\n✅ 环境就绪！在 Hermes 中加载 SKILL.md 后说 '帮我找工作' 即可开始。")
+    print("\n⚠️ 部分项未通过，但 Dashboard 仍可启动。")
+    print("  BOSS直聘需要手动登录一次后 Cookie 自动复用。")
 
 sys.exit(0 if ok_count == total else 1)

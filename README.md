@@ -1,22 +1,11 @@
-# JobBot — AI 求职助手
+# JobBot Agent — 开源通用求职技能包
 
-**Agent 干重复劳动，你做决策。**
-*让 AI Agent 帮你搜岗位、投简历、回消息、追面试——三平台全覆盖。*
+> ⚠️ **这是通用版，零个人信息。** 加载后通过上传简历或输入意向来配置。弟弟专用版在隔壁 `jobbot/`。
 
-- **仓库**: [weiwei-run/jobbot-agent](https://github.com/weiwei-run/jobbot-agent)
-- **许可证**: MIT
-- **语言**: Python
-- **支持平台**: Hermes · OpenCode · Claude Code · OpenClaw
+## 定位
 
----
-
-## 为什么做 JobBot？
-
-帮弟弟找实习的时候，每天要在 BOSS 直聘、前程无忧、实习僧三个平台之间来回切换——搜索、浏览、筛选、投递、回复 HR 消息，一套流程下来两三个小时就没了。
-
-> *"能不能让 AI 替我做这些重复的事？"*
-
-能。JobBot 就是一个技能包——加载到你的 AI Agent 里，它就能自动完成从搜索到追踪的全流程。你只需要做两件事：确认投哪些，审核回复内容。
+一个可分发到任何 AI Agent（Hermes / OpenCode / Claude Code / OpenClaw）的技能包。
+用户提供自己的简历和意向岗位 → Agent 自动对接三平台（BOSS直聘/前程无忧/实习僧）搜索、评分、投递、回复、追踪。
 
 ---
 
