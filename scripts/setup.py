@@ -32,9 +32,12 @@ step("pip: playwright", lambda: (pw_spec is not None, "已安装" if pw_spec els
 
 # Auto-install playwright if missing
 if pw_spec is None:
-    print("  → 正在安装 playwright...")
-    r = subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], capture_output=True, text=True)
-    print(f"    {'✅' if r.returncode == 0 else '❌'} {r.stdout.strip()[-100:] if r.stdout else r.stderr.strip()[-100:]}")
+    print("  → 正在安装 playwright (约30秒)...")
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "playwright"])
+    ok = r.returncode == 0
+    print(f"    {'✅' if ok else '❌'} playwright {'安装完成' if ok else '安装失败'}")
+else:
+    print("    ✅ playwright 已安装")
 
 # Playwright Firefox browser
 def check_firefox():
@@ -57,10 +60,10 @@ try:
     with sync_playwright() as p:
         try: p.firefox.launch().close()
         except:
-            print("  → 正在下载 Firefox (~116MB)...")
-            r = subprocess.run([sys.executable, "-m", "playwright", "install", "firefox"], capture_output=True, text=True)
+            print("  → 正在下载 Firefox 浏览器 (~116MB, CDN国内直连, 约3-10分钟, 请耐心等待)...")
+            r = subprocess.run([sys.executable, "-m", "playwright", "install", "firefox"])
             ok = r.returncode == 0
-            print(f"    {'✅' if ok else '❌'} Firefrox {'安装完成' if ok else '安装失败: '+r.stderr.strip()[-80:]}")
+            print(f"    {'✅' if ok else '❌'} Firefox {'安装完成' if ok else '安装失败，可手动运行: playwright install firefox'}")
 except ImportError:
     pass
 
