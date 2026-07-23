@@ -1,7 +1,6 @@
 # JobBot Agent — 产品设计说明书
 
 > 开源通用版。本文档定义产品要做什么、长什么样、怎么工作。
-> 弟弟专用版 `jobbot/` 不在本文档范围内。
 
 ---
 
@@ -378,7 +377,7 @@ DISCOVERED → APPLIED → HR_READ → HR_REPLIED → INTERVIEWING → OFFERED
 | 4 | `setup.py` 自动安装浏览器依赖（Playwright + Firefox） | P0 |
 | 5 | `python start.py` 一键启动（Dashboard + 环境检测） | P1 |
 | 6 | 投递记录 CSV 导出 | P1 |
-| 7 | SKILL.md 精简，去掉弟弟相关硬编码，完全参数化 | P1 |
+| 7 | SKILL.md 精简，完全参数化 | P1 |
 | 8 | Dashboard 内嵌消息查看/回复审核台 | P2 |
 
 ---
