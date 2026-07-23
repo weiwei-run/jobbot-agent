@@ -20,21 +20,20 @@
 
 不部署服务器。全部跑在用户本地：
 - 用户自己的 AI Agent（Hermes / OpenCode / Claude Code）
-- 用户自己的浏览器（Playwright + Firefox）
+- 用户自己的浏览器（Camofox）
 - 用户自己的 API key
 - 投递记录存本地 JSON，看板是本地 HTML
-- **无需 Camofox、无需 npm、零翻墙依赖**
+- **需 Camofox + Node.js（npm 安装），零翻墙依赖**
 
 ### 环境安装
 
 Agent 加载技能包后自动执行，用户无需手动操作：
 
 ```bash
-pip install playwright        # 3MB, 纯 Python
-playwright install firefox    # 116MB, CDN 国内直连
+npm install -g @askjo/camofox-browser    # ~150MB, 约2-5分钟
 ```
 
-`scripts/setup.py` 检测环境 → 缺失自动安装。安装失败时显示「请手动运行」并继续（51job + 实习僧 仍可用）。
+`scripts/setup.py` 检测 Node.js / npm / Camofox → 缺失自动安装。
 
 ### 当前阶段
 
@@ -194,7 +193,7 @@ JobBot：BOSS 有 2 条新消息：
               ├── 读 config/user_profile.json（用户画像）
               ├── 读 config/platforms.yml（平台配置）
               │
-              ├── 操作浏览器（Playwright + Firefox）
+              ├── 操作浏览器（Camofox）
               │   ├── 搜索岗位
               │   ├── 投递/沟通
               │   └── 检查消息/回复
@@ -334,14 +333,14 @@ DISCOVERED → APPLIED → HR_READ → HR_REPLIED → INTERVIEWING → OFFERED
 
 ### 6.3 浏览器依赖未处理
 
-- 用户机器可能没装 Playwright + Firefox
-- `setup.py` 需自动检测 + 安装（`pip install playwright && playwright install firefox`）
-- 安装失败 → 提示手动运行，51job + 实习僧 仍可用
+- 用户机器可能没装 Camofox
+- `setup.py` 需自动检测 + 安装（`npm install -g @askjo/camofox-browser`）
+- 安装失败 → 提示手动运行
 - BOSS 直聘需要登录 Cookie 持久化，登录过期时阻塞等用户手动操作，**不尝试绕过**
 
 ### 6.4 三平台接入
 
-三端统一：Playwright + Firefox，同一浏览器引擎。首次使用各平台需手动登录一次，Cookie 持久化后续复用。
+三端统一：Camofox，同一浏览器引擎。首次使用各平台需手动登录一次，Cookie 持久化后续复用。
 
 | 平台 | 搜索 | 投递 | 消息 | 注意 |
 |------|------|------|------|------|
@@ -374,7 +373,7 @@ DISCOVERED → APPLIED → HR_READ → HR_REPLIED → INTERVIEWING → OFFERED
 | 1 | 重写 Dashboard（单文件 HTML，完整功能） | P0 |
 | 2 | 配置向导独立化（Dashboard 内嵌简历编辑） | P0 |
 | 3 | `applications.json` 作为唯一数据源，废弃腾讯文档写入 | P0 |
-| 4 | `setup.py` 自动安装浏览器依赖（Playwright + Firefox） | P0 |
+| 4 | `setup.py` 自动安装浏览器依赖（Camofox） | P0 |
 | 5 | `python start.py` 一键启动（Dashboard + 环境检测） | P1 |
 | 6 | 投递记录 CSV 导出 | P1 |
 | 7 | SKILL.md 精简，完全参数化 | P1 |

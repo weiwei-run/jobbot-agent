@@ -41,15 +41,14 @@
 ### 前提条件
 
 - Python 3.10+
-- 一个已安装的 AI Agent（Hermes / OpenCode / Claude Code / OpenClaw）
-- Playwright 浏览器
+- Node.js 16+（Camofox 浏览器引擎）
+- 一个已安装的 AI Agent（Hermes / OpenCode / Claude Code）
 
 ### 三步跑起来
 
 ```bash
-# 1. 安装依赖
-pip install -r requirements.txt
-playwright install chromium
+# 1. 安装 Camofox 浏览器
+npm install -g @askjo/camofox-browser
 
 # 2. 环境检测
 python scripts/setup.py
