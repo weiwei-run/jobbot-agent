@@ -9,7 +9,16 @@ triggers:
   - 用户询问求职相关操作
 ---
 
-## Browser Setup (MUST READ)
+## Quick Start
+
+```bash
+pip install playwright && playwright install firefox
+python start.py
+```
+
+打开 http://localhost:9379 → 填简历 → 在 Agent 中说「帮我找工作」开始。
+
+## Browser Setup
 
 **Use Playwright with Firefox only. Do NOT install or use Chromium.**
 
@@ -224,7 +233,7 @@ GET https://we.51job.com/api/job/search-pc?api_key=51job&keyword={urlencode}&job
 }
 ```
 
-投递完成后生成 HTML 看板（`data/dashboard.html`）。
+投递完成后更新 `data/applications.json`，Dashboard 自动刷新（`python dashboard.py` 或 `python start.py`）。
 
 ---
 
@@ -296,7 +305,7 @@ DISCOVERED → MATCHED → APPLIED → HR_REPLIED → IN_CONVERSATION → INTERV
 FILTERED      跳过     NO_RESPONSE  REJECTED        REJECTED
 ```
 
-每完成一轮操作后，更新 `data/applications.json`，重新生成 `data/dashboard.html`。
+每完成一轮操作后，更新 `data/applications.json`，Dashboard 在 `http://localhost:9379` 自动刷新。
 
 ---
 
@@ -307,7 +316,7 @@ FILTERED      跳过     NO_RESPONSE  REJECTED        REJECTED
 - 各状态统计（待回复 / HR已回复 / 已约面试 等）
 - 详细投递列表（公司、岗位、状态、时间、链接）
 
-用户说"看进度"或"打开看板" → 告诉他看板文件路径，或者直接在浏览器打开。
+用户说"看进度"或"打开看板" → 打开 `http://localhost:9379`（需先运行 `python start.py` 或 `python dashboard.py`）。
 
 ---
 
@@ -365,8 +374,8 @@ FILTERED      跳过     NO_RESPONSE  REJECTED        REJECTED
 - `references/wuyou-api.md` — 51job API 完整文档
 - `references/reply-sop.md` — 消息回复完整 SOP
 - `references/trust-detection.md` — 诈骗/幽灵岗位检测
-- `references/boss-resume-send.md` — BOSS发简历流程（弹窗处理）
-- `scripts/` — Python 辅助脚本
+- `scripts/setup.py` — 环境检测 + 自动安装依赖
+- `start.py` — 一键启动（检测环境 → 启动Dashboard → 打开浏览器）
 
 ---
 
