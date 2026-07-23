@@ -310,7 +310,9 @@ GET https://we.51job.com/api/job/search-pc?api_key=51job&keyword={urlencode}&job
 
 ---
 
-## 回复循环
+## 回复循环 ⏸️ 暂未启用
+
+> ⚠️ 回复场景尚未完成设计，三端消息 API 未统一。此工作流暂停，等后续完善后再启用。当前只做投递循环。
 
 用户说"检查消息"或"看回复"时触发。
 
