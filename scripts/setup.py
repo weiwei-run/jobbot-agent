@@ -41,11 +41,14 @@ step("Node.js >= 16", check_node)
 
 # npm
 def check_npm():
-    try:
-        r = subprocess.run(["npm", "--version"], capture_output=True, text=True)
-        return True, r.stdout.strip()
-    except FileNotFoundError:
-        return False, "未安装 (需 Node.js)"
+    for cmd in ["npm", "npm.cmd"]:
+        try:
+            r = subprocess.run([cmd, "--version"], capture_output=True, text=True)
+            if r.returncode == 0:
+                return True, r.stdout.strip()
+        except FileNotFoundError:
+            continue
+    return False, "未安装 (需 Node.js, 安装后重启终端)"
 
 step("npm", check_npm)
 
@@ -65,7 +68,7 @@ def check_camoufox():
     ok = r.returncode == 0
     return ok, "安装完成" if ok else "安装失败，手动运行: npm install -g @askjo/camofox-browser"
 
-step("Camofox 浏览器", check_camofox)
+step("Camofox 浏览器", check_camoufox)
 
 # Camofox install dir
 def check_camoufox_dir():
