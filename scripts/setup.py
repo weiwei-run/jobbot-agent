@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""JobBot 环境检测 + 自动安装 — python scripts/setup.py"""
+"""JobBot 环境检测 + 自动安装 — python scripts/setup.py
+检测 Node.js / npm / Camofox，缺失自动安装。"""
 
-import subprocess, sys, importlib.util, json
+import subprocess, sys, os
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -26,51 +27,65 @@ def step(name, fn):
 # Python
 step("Python >= 3.10", lambda: (sys.version_info >= (3, 10), sys.version.split()[0]))
 
-# Playwright pip
-pw_spec = importlib.util.find_spec("playwright")
-step("pip: playwright", lambda: (pw_spec is not None, "已安装" if pw_spec else "未安装"))
-
-# Auto-install playwright if missing
-if pw_spec is None:
-    print("  → 正在安装 playwright (约30秒)...")
-    r = subprocess.run([sys.executable, "-m", "pip", "install", "playwright"])
-    ok = r.returncode == 0
-    print(f"    {'✅' if ok else '❌'} playwright {'安装完成' if ok else '安装失败'}")
-else:
-    print("    ✅ playwright 已安装")
-
-# Playwright Firefox browser
-def check_firefox():
+# Node.js
+def check_node():
     try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            p.firefox.launch().close()
-            return True, "Firefox 已安装"
-    except Exception as e:
-        msg = str(e)
-        if "doesn't exist" in msg:
-            return False, "Firefox 未安装 — 正在自动安装..."
-        return False, msg[:80]
+        r = subprocess.run(["node", "--version"], capture_output=True, text=True)
+        v = r.stdout.strip().lstrip("v")
+        major = int(v.split(".")[0])
+        return major >= 16, v
+    except FileNotFoundError:
+        return False, "未安装 — 请从 https://nodejs.org 下载 LTS 版"
 
-step("Playwright Firefox", check_firefox)
+step("Node.js >= 16", check_node)
 
-# Auto-install Firefox
-try:
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        try: p.firefox.launch().close()
-        except:
-            print("  → 正在下载 Firefox 浏览器 (~116MB, CDN国内直连, 约3-10分钟, 请耐心等待)...")
-            r = subprocess.run([sys.executable, "-m", "playwright", "install", "firefox"])
-            ok = r.returncode == 0
-            print(f"    {'✅' if ok else '❌'} Firefox {'安装完成' if ok else '安装失败，可手动运行: playwright install firefox'}")
-except ImportError:
-    pass
+# npm
+def check_npm():
+    try:
+        r = subprocess.run(["npm", "--version"], capture_output=True, text=True)
+        return True, r.stdout.strip()
+    except FileNotFoundError:
+        return False, "未安装 (需 Node.js)"
+
+step("npm", check_npm)
+
+# Camofox browser
+def check_camoufox():
+    try:
+        r = subprocess.run(["npm", "list", "-g", "@askjo/camofox-browser", "--depth=0"],
+                          capture_output=True, text=True)
+        if "@askjo/camofox-browser" in r.stdout:
+            return True, "已安装"
+    except:
+        pass
+
+    # Auto-install
+    print("  → 正在安装 Camofox 浏览器 (~150MB, npm registry, 约2-5分钟, 请耐心等待)...")
+    r = subprocess.run(["npm", "install", "-g", "@askjo/camofox-browser"])
+    ok = r.returncode == 0
+    return ok, "安装完成" if ok else "安装失败，手动运行: npm install -g @askjo/camofox-browser"
+
+step("Camofox 浏览器", check_camofox)
+
+# Camofox install dir
+def check_camoufox_dir():
+    home = os.environ.get("USERPROFILE", os.environ.get("HOME", ""))
+    path = os.path.join(home, "AppData", "Local", "camoufox", "camoufox")
+    if os.path.isdir(path):
+        return True, path
+    # try macOS/Linux
+    for alt in [os.path.join(home, ".cache", "camoufox", "camoufox"),
+                os.path.join(home, "Library", "Caches", "camoufox", "camoufox")]:
+        if os.path.isdir(alt):
+            return True, alt
+    return False, f"未找到 (expected: {path})"
+
+step("Camofox 浏览器引擎", check_camoufox_dir)
 
 # Config
 step("配置文件", lambda: (
     CONFIG_FILE.exists() or CONFIG_TEMPLATE.exists(),
-    "就绪" if CONFIG_FILE.exists() else "模板就绪 (需重命名为 user_profile.json)"
+    "就绪" if CONFIG_FILE.exists() else "模板就绪 (重命名为 user_profile.json)"
 ))
 
 # Data dir
@@ -80,9 +95,9 @@ print(f"\n{'=' * 50}")
 print(f"结果: {ok_count}/{total} 项通过")
 
 if ok_count == total:
-    print("\n✅ 环境就绪！python dashboard.py 启动看板。")
+    print("\n✅ 环境就绪！python start.py 启动。")
 else:
     print("\n⚠️ 部分项未通过，但 Dashboard 仍可启动。")
-    print("  BOSS直聘需要手动登录一次后 Cookie 自动复用。")
+    print("  各平台首次使用需手动登录一次，Cookie 自动复用。")
 
 sys.exit(0 if ok_count == total else 1)

@@ -12,7 +12,7 @@ triggers:
 ## Quick Start
 
 ```bash
-pip install playwright && playwright install firefox
+npm install -g @askjo/camofox-browser
 python start.py
 ```
 
@@ -20,14 +20,49 @@ python start.py
 
 ## Browser Setup
 
-**Use Playwright with Firefox only. Do NOT install or use Chromium.**
+**Use Camofox (Firefox-based anti-detection browser). Do NOT use Playwright or Chromium.**
+
+Prerequisites: Node.js >= 16 + npm (download from https://nodejs.org if missing).
 
 ```bash
-pip install playwright
-playwright install firefox
+npm install -g @askjo/camofox-browser    # ~150MB, 约2-5分钟
+python scripts/setup.py                  # 自动检测 + 安装环境
 ```
 
-Firefox ~116MB, Playwright CDN works in China. Cancel any Chromium download and run `playwright install firefox` instead.
+### Starting the Camofox server
+
+每次操作平台前，启动 Camofox HTTP server（端口 9377）：
+
+```bash
+# Windows: 清残留 + 启动
+taskkill //F //IM camoufox.exe 2>/dev/null
+taskkill //F //IM firefox.exe 2>/dev/null
+set CAMOUFOX_INSTALL_DIR=%USERPROFILE%\AppData\Local\camoufox\camoufox
+node "%APPDATA%\npm\node_modules\@askjo\camofox-browser\server.js"
+
+# macOS/Linux:
+pkill -f camoufox 2>/dev/null
+CAMOUFOX_INSTALL_DIR=~/.cache/camoufox/camoufox \
+  node "$(npm root -g)/@askjo/camofox-browser/server.js"
+```
+
+10秒内就绪。服务器日志中出现 "listening" 或端口可访问即启动成功。
+
+### Camofox REST API
+
+所有操作通过 HTTP 调用 `http://localhost:9377`，`userId` 固定为 `jobbot`。
+
+| Action | Method | Endpoint | Body |
+|--------|--------|----------|------|
+| 创建标签页 | POST | `/tabs` | `{"userId":"jobbot","url":"https://..."}` |
+| 导航 | POST | `/tabs/:id/navigate` | `{"userId":"jobbot","url":"..."}` |
+| 获取快照 | GET | `/tabs/:id/snapshot?userId=jobbot` | — |
+| 点击元素 | POST | `/tabs/:id/click` | `{"userId":"jobbot","ref":"@eN"}` |
+| 执行JS | POST | `/tabs/:id/evaluate` | `{"userId":"jobbot","expression":"..."}` |
+| 输入文字 | POST | `/tabs/:id/type` | `{"userId":"jobbot","text":"...","ref":"@eN"}` |
+| 关闭标签页 | DELETE | `/tabs/:id` | — |
+
+详见 `references/camofox-api.md`。
 
 ---
 
@@ -70,7 +105,7 @@ Firefox ~116MB, Playwright CDN works in China. Cancel any Chromium download and 
 python scripts/setup.py
 ```
 
-自动检测 Python 版本、安装 playwright pip 包、下载 Firefox 浏览器（~116MB，国内 CDN 直连）。安装失败时提示用户手动运行 `pip install playwright && playwright install firefox`，然后继续后面的步骤（51job + 实习僧 仍可用，BOSS 需 Firefox）。
+自动检测 Python 版本、Node.js、npm、Camofox 浏览器（~150MB，npm registry，约2-5分钟）。安装失败时提示用户手动运行 `npm install -g @askjo/camofox-browser`。
 
 ### Step A：收集简历信息
 
@@ -399,11 +434,11 @@ FILTERED      跳过     NO_RESPONSE  REJECTED        REJECTED
 
 ## 参考文档
 
-- `references/boss-pitfalls.md` — BOSS直聘完整陷阱列表
-- `references/wuyou-api.md` — 51job API 完整文档
-- `references/reply-sop.md` — 消息回复完整 SOP
+- `references/camofox-api.md` — Camofox REST API 完整参考
+- `references/boss-pitfalls.md` — BOSS直聘陷阱列表
+- `references/reply-sop.md` — 消息回复 SOP
 - `references/trust-detection.md` — 诈骗/幽灵岗位检测
-- `scripts/setup.py` — 环境检测 + 自动安装依赖
+- `scripts/setup.py` — 环境检测 + 自动安装依赖（Node.js / npm / Camofox）
 - `start.py` — 一键启动（检测环境 → 启动Dashboard → 打开浏览器）
 
 ---
