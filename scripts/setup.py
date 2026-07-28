@@ -62,11 +62,14 @@ def check_camoufox():
     except:
         pass
 
-    # Auto-install
-    print("  → 正在安装 Camofox 浏览器 (~150MB, npm registry, 约2-5分钟, 请耐心等待)...")
-    r = subprocess.run(["npm", "install", "-g", "@askjo/camofox-browser"])
+    # Auto-install with live progress (no capture_output)
+    print("  → 正在安装 Camofox 浏览器 (~150MB, 约2-5分钟)...")
+    print("  " + "-" * 40)
+    r = subprocess.run(["npm", "install", "-g", "@askjo/camofox-browser"],
+                       capture_output=False)
+    print("  " + "-" * 40)
     ok = r.returncode == 0
-    return ok, "安装完成" if ok else "安装失败，手动运行: npm install -g @askjo/camofox-browser"
+    return ok, "安装完成" if ok else f"安装失败(exit={r.returncode}), 手动: npm install -g @askjo/camofox-browser"
 
 step("Camofox 浏览器", check_camoufox)
 

@@ -105,7 +105,7 @@ CAMOUFOX_INSTALL_DIR=~/.cache/camoufox/camoufox \
 python scripts/setup.py
 ```
 
-自动检测 Python 版本、Node.js、npm、Camofox 浏览器（~150MB，npm registry，约2-5分钟）。安装失败时提示用户手动运行 `npm install -g @askjo/camofox-browser`。
+**Agent 必须主动执行，不要推给用户。** 运行 `python scripts/setup.py`，检测 Python / Node.js / npm / Camofox。Camofox 缺失时脚本会自动执行 `npm install -g @askjo/camofox-browser`（~150MB，约 2-5 分钟），**进度实时输出，不用 capture_output 吞掉**。安装失败时提示用户手动运行上述命令。
 
 ### Step A：收集简历信息
 
