@@ -1,50 +1,76 @@
 #!/usr/bin/env python3
-"""JobBot 一键启动 — python start.py
-检测环境 → 启动 Dashboard → 打开浏览器"""
+"""JobBot 一键启动 — python start.py → http://localhost:9379
 
-import subprocess, sys, webbrowser, time
+纯 Python 即可启动 Dashboard + 51job 搜索；
+BOSS直聘/实习僧搜索与三大平台自动投递需要 Camofox 浏览器（首次运行按提示安装）。
+"""
+import socket
+import subprocess
+import sys
+import webbrowser
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).parent
+PORT = 9379
 
-def run(cmd, **kw):
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True, **kw)
 
-print("🤖 JobBot Agent 启动中...\n")
+def port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
-# 1. Environment check
-print("[1/3] 环境检测...")
-setup = run(f'"{sys.executable}" "{ROOT}/scripts/setup.py"')
-if setup.returncode != 0:
-    print("⚠️ 部分依赖缺失，Dashboard 仍可启动。BOSS直聘需手动登录。")
-    print(f"   详情: python scripts/setup.py\n")
 
-# 2. Start dashboard in background
-print("[2/3] 启动 Dashboard...")
-dash = subprocess.Popen(
-    [sys.executable, str(ROOT / "dashboard.py")],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-)
-time.sleep(1.5)
+def main():
+    print("🤖 JobBot 启动中...\n")
 
-# 3. Open browser
-print("[3/3] 打开浏览器...")
-webbrowser.open("http://localhost:9379")
+    print("[1/3] 环境检查...")
+    ok_py = sys.version_info >= (3, 10)
+    print(f"  {'✅' if ok_py else '❌'} Python {sys.version.split()[0]} (需 3.10+)")
+    if not ok_py:
+        print("  ⚠️ 请安装 Python 3.10+：https://python.org")
+        sys.exit(1)
 
-print(f"""
-✅ JobBot Dashboard 已启动！
-   👉 http://localhost:9379
+    if port_in_use(PORT):
+        print(f"  ⚠️ 端口 {PORT} 已被占用（JobBot 可能已在运行），直接打开看板。")
+    else:
+        print(f"  ✅ 端口 {PORT} 空闲")
 
-   - 填写意向描述 → 保存配置
-   - 在 Agent 中说「帮我找工作」开始投递
-   - 投递记录自动显示在此页面
+    print("[2/3] 启动 Dashboard...")
+    if not port_in_use(PORT):
+        dash = subprocess.Popen(
+            [sys.executable, str(ROOT / "dashboard.py")],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(1.5)
+    else:
+        dash = None
 
-   按 Ctrl+C 停止服务
+    print("[3/3] 打开浏览器...")
+    webbrowser.open(f"http://localhost:{PORT}")
+
+    print(f"""
+✅ JobBot 已启动！ 👉 http://localhost:{PORT}
+
+   三步开始使用：
+   ① 配置 AI：填 LLM API Key（支持 DeepSeek/Kimi/通义等 OpenAI 兼容接口）
+   ② 上传简历 / 填写求职意向（城市、岗位、技能）
+   ③ 点击「开始搜索」→ AI 生成关键词、三平台搜索评分 → 点「投递」自动投递
+
+   - 51job 搜索无需浏览器；BOSS直聘/实习僧与自动投递需 Camofox（看板内有检测与登录引导）
+   - 遇到未登录会自动停在登录页并在看板提示手动登录，登录前不会投递
+   - 投递记录自动同步到在线表格（看板「在线表格同步」设置）
+   - 数据全本地，按 Ctrl+C 停止服务
 """)
 
-try:
-    while True:
-        time.sleep(1)
-except KeyboardInterrupt:
-    dash.terminate()
-    print("\n👋 JobBot 已停止")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        if dash:
+            dash.terminate()
+        print("\n👋 JobBot 已停止")
+
+
+if __name__ == "__main__":
+    main()

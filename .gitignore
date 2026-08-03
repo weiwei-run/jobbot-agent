@@ -13,6 +13,10 @@ Thumbs.db
 
 # User data (not for distribution)
 config/user_profile.json
+config/llm.json
+config/settings.json
 data/applications.json
 data/dashboard.html
 data/resume/
+data/_probe*
+__pycache__/

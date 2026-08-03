@@ -1,19 +1,41 @@
 #!/usr/bin/env python3
 """JobBot Dashboard — python dashboard.py → http://localhost:9379
-ponytail: stdlib HTTP server + single inline HTML, data via local JSON."""
 
-import http.server, json, os, sys
+单文件本地看板（纯 stdlib）：LLM 配置 → 简历/意向 → 三平台搜索评分 →
+一键自动投递 → 投递记录管理 → 在线表格同步。
+"""
+import http.server
+import json
+import os
+import re
+import sys
+import threading
+import uuid
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import engine  # noqa: E402
+import spreadsheet  # noqa: E402
+from llm import load_config, save_config, test_connection  # noqa: E402
 
 PORT = 9379
 ROOT = Path(__file__).parent
 DATA_FILE = ROOT / "data" / "applications.json"
 CONFIG_FILE = ROOT / "config" / "user_profile.json"
 CONFIG_TEMPLATE = ROOT / "config" / "user_profile_template.json"
+RESUME_DIR = ROOT / "data" / "resume"
 
 os.makedirs(ROOT / "data", exist_ok=True)
+os.makedirs(RESUME_DIR, exist_ok=True)
 if not DATA_FILE.exists():
-    DATA_FILE.write_text(json.dumps({"applications": [], "stats": {"total_applied": 0, "hr_replied": 0, "interview_scheduled": 0, "rejected": 0}}, ensure_ascii=False, indent=2), encoding="utf-8")
+    engine.save_db(engine._empty_db())
+
+# 全局互斥：避免并发搜索 / 并发投递打爆 Camofox
+SEARCH_LOCK = threading.Lock()
+APPLY_LOCK = threading.Lock()
+
 
 HTML = r"""<!DOCTYPE html>
 <html lang="zh">
@@ -22,31 +44,32 @@ HTML = r"""<!DOCTYPE html>
 <style>
 :root{--bg:#0d1117;--fg:#e6edf3;--accent:#58a6ff;--good:#3fb950;--warn:#d29922;--err:#f85149;--card:#161b22;--border:#30363d}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font:14px/1.6 system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:20px;max-width:1100px;margin:0 auto}
+body{font:14px/1.6 system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:20px;max-width:1120px;margin:0 auto}
 h1{font-size:22px;margin-bottom:4px}.sub{color:#8b949e;margin-bottom:20px;font-size:13px}
 section{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:18px;margin-bottom:16px}
-h3{font-size:15px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+h3{font-size:15px;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .stat-card{background:var(--bg);border-radius:8px;padding:14px;text-align:center}
 .stat-card .num{font-size:28px;font-weight:700}.stat-card .lbl{font-size:12px;color:#8b949e;margin-top:2px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;padding:8px 10px;color:#8b949e;font-weight:500;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}
 th:hover{color:var(--fg)}
-td{padding:8px 10px;border-bottom:1px solid var(--border)}
+td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
 tbody tr.main-row{cursor:pointer}tbody tr.main-row:hover td{background:rgba(88,166,255,.08)}
 tr.expand-row td{border-bottom:1px solid var(--accent);padding:12px 14px;background:rgba(88,166,255,.04);font-size:13px}
 tr.expand-row strong{color:var(--accent)}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .badge{padding:2px 8px;border-radius:10px;font-size:11px;white-space:nowrap}
-.badge-applied{background:#2a1f0a;color:var(--warn)}.badge-replied{background:#0a1f2a;color:var(--accent)}
-.badge-interview{background:#0a2a1a;color:var(--good)}.badge-rejected{background:#2a0a0a;color:var(--err)}
-.badge-discovered{background:#1a1a2a;color:#8b949e}
+.badge-discovered{background:#1a1a2a;color:#8b949e}.badge-applied{background:#2a1f0a;color:var(--warn)}
+.badge-hr_replied{background:#0a1f2a;color:var(--accent)}.badge-interviewing,.badge-interview_scheduled{background:#0a2a1a;color:var(--good)}
+.badge-offered{background:#0a2a1a;color:var(--good)}.badge-rejected{background:#2a0a0a;color:var(--err)}
 .stars{color:var(--warn)}
 button,.btn{background:var(--accent);color:#fff;border:0;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600}
 button:hover{opacity:.85}button:disabled{opacity:.4;cursor:not-allowed}
 .btn-sm{background:var(--border);padding:4px 12px;font-size:12px}.btn-sm:hover{background:#484f58}
-textarea,input[type=text]{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:8px;font:13px system-ui;resize:vertical}
-textarea:focus,input[type=text]:focus{outline:none;border-color:var(--accent)}
+.btn-good{background:var(--good);color:#000}.btn-warn{background:var(--warn);color:#000}.btn-err{background:var(--err)}
+textarea,input[type=text],input[type=password],select{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:8px;font:13px system-ui;resize:vertical}
+textarea:focus,input:focus,select:focus{outline:none;border-color:var(--accent)}
 label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8px}
 .row{display:flex;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap}
 .hidden{display:none}
@@ -55,65 +78,226 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
 .filters button.active{background:var(--accent);border-color:var(--accent);color:#fff}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 #toast{position:fixed;top:16px;right:16px;background:var(--good);color:#000;padding:10px 20px;border-radius:6px;font-weight:600;z-index:99;transition:opacity .3s}
-.msg-line{padding:2px 0;font-size:12px}.msg-line .from{font-weight:600;margin-right:6px}
-.msg-line .from.me{color:var(--accent)}.msg-line .from.hr{color:var(--good)}
-th.sort-asc::after{content:' ↑'}th.sort-desc::after{content:' ↓'}
+.job-card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px}
+.job-card .top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.job-card .pos{font-weight:600}.job-card .comp{color:#8b949e;font-size:12px}
+.job-card .meta{font-size:12px;color:#8b949e;margin-top:4px}
+.job-card .jd{font-size:12px;color:#8b949e;margin-top:6px;max-height:48px;overflow:hidden}
+.job-card .act{margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.job-card .apply-result{font-size:12px;margin-top:6px;padding:6px 10px;border-radius:6px;background:rgba(88,166,255,.08);color:var(--accent)}
+.job-card .apply-result.ok{background:rgba(63,185,80,.08);color:var(--good)}
+.job-card .apply-result.err{background:rgba(248,81,73,.08);color:var(--err)}
+.risk-tag{padding:1px 8px;border-radius:8px;font-size:11px;background:#2a0a0a;color:var(--err)}
+.reason{font-size:12px;color:var(--good)}
+.kw{display:inline-block;background:var(--bg);border:1px solid var(--border);padding:2px 10px;border-radius:12px;margin:2px 4px 2px 0;font-size:12px}
+.status-btns{display:flex;gap:4px;flex-wrap:wrap}
+.status-btns button{padding:2px 8px;font-size:11px;border-radius:10px}
+.warn-line{font-size:12px;color:var(--warn);margin:4px 0}
+.env-chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:4px 12px;margin:4px 6px 4px 0;font-size:12px}
+.env-chip .dot{width:8px;height:8px;border-radius:50%;background:#8b949e}
+.env-chip .dot.ok{background:var(--good)}.env-chip .dot.err{background:var(--err)}.env-chip .dot.warn{background:var(--warn)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:760px){.grid2{grid-template-columns:1fr}.grid4{grid-template-columns:repeat(2,1fr)}}
 </style></head>
 <body>
 <h1>🤖 JobBot Agent</h1>
-<p class=sub>开源通用求职技能包 · 本地运行 · 数据不上传</p>
+<p class=sub>AI求职助手 · 本地运行 · 配置一次 LLM Key 即用 · 三大平台搜索/投递 · 在线表格同步</p>
 <div id=toast style=opacity:0></div>
 
-<section id=stats-section><h3>📊 投递总览</h3>
-<div class=grid4 id=stats-grid></div></section>
+<section id=llm-section>
+  <h3>🔑 第一步：配置 AI（LLM API Key）</h3>
+  <div class=row>
+    <div style="flex:2"><label>API 地址 (Base URL)</label><input type=text id=llm-base placeholder="https://api.deepseek.com/v1"></div>
+    <div style="flex:2"><label>模型</label><input type=text id=llm-model placeholder="deepseek-chat"></div>
+    <div style="flex:3"><label>API Key</label><input type=password id=llm-key placeholder="sk-..."></div>
+  </div>
+  <div class=row>
+    <button onclick=saveLLM()>💾 保存 Key</button>
+    <button class="btn-sm" onclick=testLLM()>🔌 测试连接</button>
+    <span id=llm-status style="font-size:12px;color:var(--good)"></span>
+  </div>
+  <p style="font-size:12px;color:#8b949e;margin-top:8px">支持任何 OpenAI 兼容接口（DeepSeek / Kimi / 通义 / OpenAI…）。Key 只存在本地 config/llm.json。</p>
+</section>
 
 <section id=config-section>
-  <h3 id=config-title>🚀 第一步：填写求职信息</h3>
-  <div id=upload-area style="border:2px dashed var(--border);border-radius:8px;padding:18px;text-align:center;cursor:pointer;margin-bottom:14px" onclick="document.getElementById('resume-file').click()">
-    <input type=file id=resume-file accept=".pdf,.doc,.docx,.txt" style=display:none onchange="uploadResume(this)">
-    📎 上传简历 (PDF/Word/TXT) <span id=resume-name style=color:var(--good)></span>
-  </div>
-  <label>意向描述（城市、学历、专业、目标岗位、技能…）</label>
-  <textarea id=cfg-intent rows=4 placeholder="例：大专，电气自动化，2027毕业，找南京PLC调试或自动化实习，学过CAD和西门子PLC，有电工证，期望薪资3000-5000"></textarea>
-  <div class=row>
-    <button onclick=saveConfig()>💾 保存配置</button>
-    <span style=font-size:12px;color:var(--good) id=cfg-saved></span>
+  <h3 id=config-title>🚀 第二步：简历与求职意向</h3>
+  <div class=grid2>
+    <div>
+      <label>上传简历（TXT / Word / PDF）</label>
+      <div id=upload-area style="border:2px dashed var(--border);border-radius:8px;padding:14px;text-align:center;cursor:pointer;margin-bottom:10px" onclick="document.getElementById('resume-file').click()">
+        <input type=file id=resume-file accept=".pdf,.doc,.docx,.txt" style=display:none onchange="uploadResume(this)">
+        📎 点击上传 <span id=resume-name style=color:var(--good)></span>
+      </div>
+      <div id=resume-parse style="font-size:12px;color:#8b949e"></div>
+    </div>
+    <div>
+      <label>意向描述（城市、学历、专业、目标岗位、技能…）</label>
+      <textarea id=cfg-intent rows=5 placeholder="例：本科计算机，2027毕业，找南京 Python 后端开发实习，会用 Django/FastAPI，期望薪资3000-6000"></textarea>
+      <div class=row>
+        <label style="margin:0">目标城市</label>
+        <input type=text id=cfg-city value="南京" style="width:120px">
+        <button onclick=saveConfig()>💾 保存意向</button>
+      </div>
+    </div>
   </div>
 </section>
 
-<section id=table-section>
-  <h3>📋 投递记录 <span style=font-size:12px;color:#8b949e id=record-count></span></h3>
+<section id=env-section class=hidden>
+  <h3>🌐 平台与浏览器环境
+    <button class="btn-sm" onclick=checkEnv()>🔍 检测环境</button>
+    <button class="btn-sm" onclick=openLogin('boss_zhipin')>BOSS 登录</button>
+    <button class="btn-sm" onclick=openLogin('wuyou')>51job 登录</button>
+    <button class="btn-sm" onclick=openLogin('shixiseng')>实习僧登录</button>
+  </h3>
+  <div id=env-box></div>
+  <p style="font-size:12px;color:#8b949e;margin-top:6px">51job 搜索无需浏览器；BOSS直聘/实习僧搜索与三大平台自动投递需要 Camofox 浏览器并登录一次。遇到验证码/风控请人工处理。</p>
+</section>
+
+<section id=login-section class=hidden>
+  <h3>🔐 需要手动登录（JobBot 不会自动登录）</h3>
+  <div id=login-box></div>
+  <p style="font-size:12px;color:#8b949e;margin-top:6px">浏览器已停在登录页。请在弹出的浏览器窗口中手动完成登录（含验证码/扫码），然后回来点「已登录，继续」。确认登录前 JobBot 不会继续搜索或投递。</p>
+</section>
+
+<section id=search-section class=hidden>
+  <h3>🔍 第三步：三平台搜索 + AI 评分
+    <button onclick=runSearch()>⚡ 开始搜索</button>
+    <span id=search-status style="font-size:12px;color:#8b949e"></span>
+  </h3>
+  <div id=search-warnings></div>
+  <div id=kw-box class=row style="margin-top:0"></div>
+  <div id=job-list></div>
+</section>
+
+<section id=stats-section class=hidden><h3>📊 投递总览</h3>
+<div class=grid4 id=stats-grid></div></section>
+
+<section id=table-section class=hidden>
+  <h3>📋 投递记录 <span style="font-size:12px;color:#8b949e" id=record-count></span></h3>
   <div class=toolbar>
     <div class=filters id=platform-filters></div>
     <div class=filters id=status-filters></div>
     <div style="flex:1"></div>
-    <button class=btn-sm onclick=toggleSort() id=sort-btn style=background:var(--card);color:var(--fg) title=排序>⏱ 时间 ↓</button>
-    <button class=btn-sm onclick=exportCSV() style=background:var(--card);color:var(--fg)>📥 CSV</button>
+    <button class=btn-sm onclick=toggleSort() id=sort-btn style="background:var(--card);color:var(--fg)">⏱ 时间 ↓</button>
+    <button class=btn-sm onclick=exportCSV() style="background:var(--card);color:var(--fg)">📥 CSV</button>
   </div>
   <div style=overflow-x:auto><table><thead><tr>
-    <th data-sort=company>公司</th><th data-sort=position>岗位</th><th data-sort=platform>平台</th><th data-sort=score>匹配</th><th data-sort=status>状态</th><th data-sort=applied_at>时间</th>
+    <th data-sort=company>公司</th><th data-sort=position>岗位</th><th data-sort=platform>平台</th><th data-sort=score>匹配</th><th data-sort=status>状态</th><th>操作</th><th data-sort=applied_at>时间</th>
   </tr></thead><tbody id=table-body></tbody></table></div>
-  <p id=empty-msg style=text-align:center;color:#8b949e;padding:40px;display:none>暂无记录。加载技能包后说「帮我找工作」开始。</p>
+  <p id=empty-msg style="text-align:center;color:#8b949e;padding:40px;display:none">暂无记录。点击上方「开始搜索」找岗位。</p>
+</section>
+
+<section id=settings-section class=hidden>
+  <h3>📤 在线表格同步 <button class="btn-sm" onclick=saveSettings()>💾 保存</button> <button class="btn-sm" onclick=testSettings()>🔌 测试</button> <span id=settings-status style="font-size:12px;color:var(--good)"></span></h3>
+  <div class=grid2>
+    <div>
+      <label>同步方式</label>
+      <select id=set-type>
+        <option value=none>关闭</option>
+        <option value=webhook>Webhook（通用，对接 Zapier/Make/自建）</option>
+        <option value=feishu>飞书多维表格</option>
+      </select>
+      <label>Webhook 地址</label>
+      <input type=text id=set-webhook placeholder="https://example.com/hook">
+    </div>
+    <div>
+      <label>飞书 App ID</label>
+      <input type=text id=set-fapp placeholder="cli_xxx">
+      <label>飞书 App Secret</label>
+      <input type=password id=set-fsecret placeholder="已保存则留空">
+      <label>多维表格 App Token</label>
+      <input type=text id=set-ftoken placeholder="bascnxxx">
+      <label>数据表 Table ID</label>
+      <input type=text id=set-ftable placeholder="tblxxx">
+    </div>
+  </div>
+  <p style="font-size:12px;color:#8b949e;margin-top:8px">开启后，每次新增/更新投递记录会自动同步。飞书申请：open.feishu.cn 创建自建应用 → 开通多维表格权限 → 复制表格 app_token 与 table_id。</p>
 </section>
 
 <script>
 let data={applications:[],stats:{}};
+let llmCfg={};
 let config={};
+let settings={};
+let loginPending=[];
 let platformFilter='all',statusFilter='all';
 let sortKey='applied_at',sortDir='desc';
 let expanded=null;
 
-async function loadAll(){await Promise.all([loadData(),loadConfig()]);render();}
-async function loadData(){
-  const r=await fetch('/api/data');data=await r.json();
-}
+async function loadAll(){await Promise.all([loadData(),loadConfig(),loadLLM(),loadSettings()]);render();}
+async function loadData(){const r=await fetch('/api/data');data=await r.json();}
 async function loadConfig(){
-  try{const r=await fetch('/api/config');config=await r.json()}catch(e){}
-  document.getElementById('cfg-intent').value=config.intent||'';
-  if(!config.intent){
-    document.getElementById('stats-section').style.display='none';
-    document.getElementById('table-section').style.display='none';
+  try{const r=await fetch('/api/config');config=await r.json();}catch(e){}
+  if(config.intent){document.getElementById('cfg-intent').value=config.intent;showApp();}
+  if(config.city)document.getElementById('cfg-city').value=config.city;
+}
+async function loadLLM(){
+  try{const r=await fetch('/api/llm');llmCfg=await r.json();
+    document.getElementById('llm-base').value=llmCfg.base_url||'';
+    document.getElementById('llm-model').value=llmCfg.model||'';
+    if(llmCfg.has_key)document.getElementById('llm-key').placeholder='已保存 (sk-****)';
+  }catch(e){}
+}
+async function loadSettings(){
+  try{const r=await fetch('/api/settings');settings=await r.json();}catch(e){}
+  const s=settings.spreadsheet||{};
+  document.getElementById('set-type').value=s.type||'none';
+  document.getElementById('set-webhook').value=s.webhook_url||'';
+  const f=s.feishu||{};
+  document.getElementById('set-fapp').value=f.app_id||'';
+  document.getElementById('set-ftoken').value=f.app_token||'';
+  document.getElementById('set-ftable').value=f.table_id||'';
+  if(f.has_secret)document.getElementById('set-fsecret').placeholder='已保存 (留空不变)';
+}
+function showApp(){
+  ['env-section','search-section','stats-section','table-section','settings-section'].forEach(id=>{
+    document.getElementById(id).classList.remove('hidden');
+  });
+}
+function platformKey(name){
+  const m={'BOSS直聘':'boss_zhipin','前程无忧':'wuyou','51job':'wuyou','实习僧':'shixiseng'};
+  return m[name]||name;
+}
+function platformName(key){
+  const m={'boss_zhipin':'BOSS直聘','wuyou':'前程无忧','shixiseng':'实习僧'};
+  return m[key]||key;
+}
+function showLoginRequired(keys){
+  if(!keys||!keys.length)return;
+  loginPending=[...new Set(keys.concat(loginPending))];
+  renderLoginBox();
+  document.getElementById('login-section').classList.remove('hidden');
+}
+function renderLoginBox(){
+  const box=document.getElementById('login-box');
+  if(!loginPending.length){box.innerHTML='';document.getElementById('login-section').classList.add('hidden');return;}
+  box.innerHTML=loginPending.map(k=>`<span class="env-chip"><span class="dot warn"></span>${esc(platformName(k))}
+    <button class="btn-sm" onclick="openLogin('${k}')">打开登录页</button>
+    <button class="btn-sm btn-good" onclick="checkLogin('${k}')">已登录，继续</button></span>`).join('');
+}
+async function checkLogin(key){
+  const r=await fetch('/api/env/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:key})});
+  const d=await r.json();
+  if(d.ok){
+    toast('✅ '+platformName(key)+' 已登录，可继续操作');
+    loginPending=loginPending.filter(x=>x!==key);
+    renderLoginBox();
+  }else{
+    toast('❌ '+platformName(key)+' 还未登录：'+d.message);
   }
+}
+async function saveLLM(){
+  const cfg={base_url:document.getElementById('llm-base').value.trim(),model:document.getElementById('llm-model').value.trim(),api_key:document.getElementById('llm-key').value.trim()};
+  const r=await fetch('/api/llm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+  const d=await r.json();
+  if(d.ok){toast('✅ Key 已保存');document.getElementById('llm-key').value='';loadLLM();}
+  else toast('❌ '+d.error);
+}
+async function testLLM(){
+  const s=document.getElementById('llm-status');s.textContent='测试中…';
+  const r=await fetch('/api/llm/test',{method:'POST'});
+  const d=await r.json();
+  s.textContent=d.ok?('✅ '+d.reply):('❌ '+d.error);
 }
 async function uploadResume(input){
   if(!input.files[0])return;
@@ -121,28 +305,130 @@ async function uploadResume(input){
   const r=await fetch('/api/upload',{method:'POST',body:fd});
   const d=await r.json();
   document.getElementById('resume-name').textContent=' ✅ '+d._filename;
-  document.getElementById('upload-area').style.borderColor='var(--good)';
+  document.getElementById('resume-parse').textContent=d._error||(d._warn||'');
   let parsed=[];
   if(d.name)parsed.push('姓名:'+d.name);
   if(d.education)parsed.push('学历:'+d.education);
   if(d.major)parsed.push('专业:'+d.major);
-  if(d.phone)parsed.push('电话:'+d.phone);
   if(d.skills&&d.skills.length)parsed.push('技能:'+d.skills.join('、'));
+  if(d._error){toast('❌ '+d._error);return;}
   if(parsed.length){
-    document.getElementById('cfg-intent').value=parsed.join('，')+'，';
-    toast('✅ 已解析 '+parsed.length+' 项信息');
+    const cur=document.getElementById('cfg-intent').value.trim();
+    document.getElementById('cfg-intent').value=(cur?cur+'，':'')+parsed.join('，');
+    toast('✅ 已解析 '+parsed.length+' 项信息，可编辑后保存');
   }else toast('✅ 简历已保存');
 }
 async function saveConfig(){
-  const cfg={intent:document.getElementById('cfg-intent').value};
-  await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-  document.getElementById('config-section').style.display='none';
-  document.getElementById('stats-section').style.display='block';
-  document.getElementById('table-section').style.display='block';
-  document.getElementById('cfg-saved').textContent='✅ 已保存';
-  toast('✅ 配置已保存');
+  const cfg={intent:document.getElementById('cfg-intent').value.trim(),city:document.getElementById('cfg-city').value.trim()||'南京'};
+  const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+  const d=await r.json();
+  if(d.ok){showApp();toast('✅ 意向已保存');}
+  else toast('❌ '+d.error);
 }
-
+async function checkEnv(){
+  const box=document.getElementById('env-box');
+  box.innerHTML='<span style="color:#8b949e">检测中…</span>';
+  const r=await fetch('/api/env');const d=await r.json();
+  renderEnv(d);
+}
+function renderEnv(d){
+  const box=document.getElementById('env-box');
+  let html='';
+  html+='<span class="env-chip"><span class="dot '+(d.camofox?'ok':'err')+'"></span>Camofox '+(d.camofox?'已运行':'未运行')+'</span>';
+  (d.platforms||[]).forEach(p=>{
+    const dot=p.enabled?'ok':'';
+    html+=`<span class="env-chip"><span class="dot ${dot}"></span>${p.name} ${p.enabled?'已启用':'已禁用'}</span>`;
+  });
+  box.innerHTML=html;
+}
+async function openLogin(platform){
+  const r=await fetch('/api/env/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform})});
+  const d=await r.json();
+  if(d.ok){toast('✅ '+d.message);checkEnv();}
+  else toast('❌ '+d.message);
+}
+async function runSearch(){
+  const intent=document.getElementById('cfg-intent').value.trim();
+  const city=document.getElementById('cfg-city').value.trim()||'南京';
+  if(!intent){toast('请先填写求职意向');return;}
+  const st=document.getElementById('search-status');st.textContent='正在生成关键词+搜索+评分（约30~90秒）…';
+  document.getElementById('search-warnings').innerHTML='';
+  const btn=document.querySelector('#search-section h3 button');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({intent,city})});
+    const d=await r.json();
+    if(!d.ok){toast('❌ '+d.error);st.textContent='';return;}
+    document.getElementById('kw-box').innerHTML=(d.keywords||[]).map(k=>`<span class=kw>${esc(k)}</span>`).join('')||'';
+    document.getElementById('search-warnings').innerHTML=(d.warnings||[]).map(w=>`<div class=warn-line>⚠ ${esc(w)}</div>`).join('');
+    if(d.login_required&&d.login_required.length)showLoginRequired(d.login_required);
+    renderJobs(d.jobs);
+    st.textContent=`共找到 ${d.jobs.length} 个岗位，点击「投递」自动投递`;
+    showApp();
+  }catch(e){toast('❌ 搜索失败');}
+  btn.disabled=false;
+}
+function renderJobs(jobs){
+  const el=document.getElementById('job-list');
+  if(!jobs.length){el.innerHTML='<p style="color:#8b949e">没有找到匹配岗位</p>';return;}
+  el.innerHTML=jobs.map((j,i)=>`
+  <div class=job-card id="jc-${i}">
+    <div class=top>
+      <div><span class=pos>${esc(j.position)}</span> ${j.risk==='suspicious'?'<span class=risk-tag>⚠ 可疑</span>':''}<br>
+      <span class=comp>${esc(j.company)}</span></div>
+      <div><span class=stars>${'⭐'.repeat(j.score||0)}</span>
+        ${j.reason?`<div class=reason>${esc(j.reason)}</div>`:''}</div>
+    </div>
+    <div class=meta>${j.platform?('🏢 '+esc(j.platform)+' · '):''}💰 ${esc(j.salary||'—')} · 📍 ${esc(j.location||'—')} · 🎓 ${esc(j.degree||'—')} · ⏱ ${esc(j.work_year||'—')}</div>
+    <div class=jd>${esc((j.jd_summary||'').slice(0,120))}</div>
+    <div class=act>
+      <button class="btn-sm btn-good" onclick=doApply(${i})>🚀 投递</button>
+      <button class=btn-sm onclick=addJob(${i})>📝 加入记录</button>
+      ${j.url?`<a href="${esc(j.url)}" target=_blank class=btn-sm style="display:inline-block;padding:4px 12px">🔗 详情</a>`:''}
+      ${j.risk==='suspicious'?`<span style="font-size:12px;color:var(--err)">可疑词: ${esc((j.risk_hits||[]).join('、'))}</span>`:''}
+    </div>
+    <div id="apply-result-${i}"></div>
+  </div>`).join('');
+  window._lastJobs=jobs;
+}
+async function doApply(i){
+  const j=window._lastJobs[i];
+  const box=document.getElementById('apply-result-'+i);
+  box.className='apply-result';box.textContent='⏳ 正在自动投递（浏览器操作中，约20~60秒）…';
+  const btn=box.closest('.job-card').querySelector('.act .btn-good');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(j)});
+    const d=await r.json();
+    if(d.ok){
+      box.className='apply-result ok';box.textContent='✅ '+d.message;
+      toast('✅ 投递成功');loadData();
+    }else{
+      box.className='apply-result err';
+      if(d.need_login){
+        box.textContent='❌ '+d.message;
+        showLoginRequired([platformKey(j.platform)]);
+      }else{
+        box.textContent='❌ '+d.message;
+      }
+      toast('❌ 投递失败');
+    }
+  }catch(e){box.className='apply-result err';box.textContent='❌ 投递异常';}
+  btn.disabled=false;
+}
+async function addJob(i){
+  const j=window._lastJobs[i];
+  const r=await fetch('/api/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({},j,{_manual:true}))});
+  const d=await r.json();
+  if(d.ok){toast('✅ 已加入记录');loadData();}
+  else toast('❌ '+d.message||d.error);
+}
+async function setStatus(url,status){
+  const r=await fetch('/api/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,status})});
+  const d=await r.json();
+  if(d.ok){toast('✅ 状态已更新');loadData();}
+  else toast('❌ '+d.error);
+}
 function toggleSort(){
   if(sortKey==='applied_at'&&sortDir==='desc'){sortKey='score';sortDir='desc';}
   else if(sortKey==='score'&&sortDir==='desc'){sortKey='applied_at';sortDir='asc';}
@@ -152,19 +438,17 @@ function toggleSort(){
   document.getElementById('sort-btn').textContent=labels[sortKey];
   render();
 }
-
 function exportCSV(){
   const rows=filteredRows();
   const hdr=['公司','岗位','平台','薪资','地点','评分','状态','联系人','投递时间','JD摘要'];
   const csv=[hdr.join(',')];
-  rows.forEach(a=>csv.push([a.company||'',a.position||'',a.platform||'',a.salary||'',a.location||'',a.score||'',a.status||'',a.contact_person||'',(a.applied_at||'').slice(0,10),'"'+(a.jd_summary||'').replace(/"/g,'""')+'"'].join(',')));
+  rows.forEach(a=>csv.push([a.company||'',a.position||'',a.platform||'',a.salary||'',a.location||'',a.score||'',a.status||'',a.hr_name||a.contact_person||'',(a.applied_at||'').slice(0,10),'"'+(a.jd_summary||'').replace(/"/g,'""')+'"'].join(',')));
   const blob=new Blob(['\uFEFF'+csv.join('\n')],{type:'text/csv;charset=utf-8'});
   const u=URL.createObjectURL(blob);
   const el=document.createElement('a');el.href=u;el.download='jobbot-export.csv';el.click();
   URL.revokeObjectURL(u);
   toast('✅ CSV 已下载');
 }
-
 function filteredRows(){
   let apps=data.applications||[];
   if(platformFilter!=='all')apps=apps.filter(a=>a.platform===platformFilter);
@@ -176,163 +460,384 @@ function filteredRows(){
   });
   return apps;
 }
-
 function render(){
   expanded=null;
   const apps=data.applications||[],s=data.stats||{};
   document.getElementById('stats-grid').innerHTML=[
-    {n:s.total_applied||0,l:'总投递',c:'var(--accent)'},
+    {n:s.total_applied||0,l:'总记录',c:'var(--accent)'},
     {n:s.hr_replied||0,l:'HR 回复',c:'var(--good)'},
     {n:s.interview_scheduled||0,l:'约面试',c:'var(--warn)'},
     {n:s.rejected||0,l:'已拒绝',c:'var(--err)'}
   ].map(x=>`<div class=stat-card><div class=num style=color:${x.c}>${x.n}</div><div class=lbl>${x.l}</div></div>`).join('');
-
   const platforms=[...new Set(apps.map(a=>a.platform).filter(Boolean))];
   document.getElementById('platform-filters').innerHTML=
     '<button onclick=setPlatformFilter("all") class='+(platformFilter==='all'?'active':'')+'>全部平台</button>'+
     platforms.map(p=>`<button onclick=setPlatformFilter("${p}") class=${platformFilter===p?'active':''}>${p}</button>`).join('');
-
   const statuses=[...new Set(apps.map(a=>a.status).filter(Boolean))];
-  const statusLabel={applied:'已投递',hr_replied:'已回复',interview_scheduled:'面试',interviewing:'面试中',rejected:'已拒绝',discovered:'新发现'};
+  const statusLabel={discovered:'新发现',applied:'已投递',hr_replied:'已回复',interviewing:'面试中',interview_scheduled:'已约面试',offered:'Offer',rejected:'已拒绝'};
   document.getElementById('status-filters').innerHTML=
     '<button onclick=setStatusFilter("all") class='+(statusFilter==='all'?'active':'')+'>全部状态</button>'+
     statuses.map(s=>`<button onclick=setStatusFilter("${s}") class=${statusFilter===s?'active':''}>${statusLabel[s]||s}</button>`).join('');
-
   const rows=filteredRows();
   document.getElementById('record-count').textContent=`${rows.length} 条`;
   document.getElementById('empty-msg').style.display=rows.length?'none':'block';
-  const badge={applied:'badge-applied',hr_replied:'badge-replied',interviewing:'badge-interview',interview_scheduled:'badge-interview',rejected:'badge-rejected',discovered:'badge-discovered'};
+  const badge={discovered:'badge-discovered',applied:'badge-applied',hr_replied:'badge-hr_replied',interviewing:'badge-interviewing',interview_scheduled:'badge-interviewing',offered:'badge-offered',rejected:'badge-rejected'};
+  const statusFlow={discovered:['applied'],applied:['hr_replied','interview_scheduled','rejected'],hr_replied:['interview_scheduled','rejected'],interviewing:['offered','rejected'],interview_scheduled:['offered','rejected'],offered:[],rejected:[]};
+  const flowLabel={applied:'已投递',hr_replied:'已回复',interview_scheduled:'约面试',interviewing:'面试中',offered:'Offer',rejected:'拒绝'};
   document.getElementById('table-body').innerHTML=rows.map((a,i)=>{
-    const s=a.status||'applied', stars='⭐'.repeat(a.score||0)||'—';
+    const s=a.status||'discovered', stars='⭐'.repeat(a.score||0)||'—';
+    const btns=(statusFlow[s]||[]).map(ns=>`<button class="btn-sm ${ns==='rejected'?'btn-err':ns==='offered'?'btn-good':''}" onclick="event.stopPropagation();setStatus('${esc(a.url)}','${ns}')">${flowLabel[ns]}</button>`).join('');
     return `<tr class=main-row onclick="toggleDetail(${i},this)" data-idx=${i}>
-      <td>${a.company||'—'}</td><td>${a.url?`<a href="${a.url}" target=_blank onclick="event.stopPropagation()">${a.position||'—'}</a>`:(a.position||'—')}</td>
-      <td>${a.platform||'—'}</td><td class=stars>${stars}</td>
-      <td><span class="badge ${badge[s]||'badge-applied'}">${statusLabel[s]||s}</span></td>
+      <td>${esc(a.company)||'—'}</td><td>${a.url?`<a href="${esc(a.url)}" target=_blank onclick="event.stopPropagation()">${esc(a.position)||'—'}</a>`:(esc(a.position)||'—')}</td>
+      <td>${esc(a.platform)||'—'}</td><td class=stars>${stars}</td>
+      <td><span class="badge ${badge[s]||'badge-discovered'}">${statusLabel[s]||s}</span></td>
+      <td><div class=status-btns>${btns}</div></td>
       <td>${(a.applied_at||'').slice(0,10)}</td></tr>`+
-      `<tr class="expand-row hidden" id=detail-${i}><td colspan=6>${detailHTML(a)}</td></tr>`;
+      `<tr class="expand-row hidden" id=detail-${i}><td colspan=7>${detailHTML(a)}</td></tr>`;
   }).join('');
 }
-
 function detailHTML(a){
   let h='';
   if(a.jd_summary)h+=`<p><strong>📝 JD摘要：</strong>${esc(a.jd_summary)}</p>`;
   if(a.salary)h+=`<p><strong>💰 薪资：</strong>${esc(a.salary)}</p>`;
   if(a.location)h+=`<p><strong>📍 地点：</strong>${esc(a.location)}</p>`;
-  if(a.contact_person)h+=`<p><strong>👤 联系人：</strong>${esc(a.contact_person)}${a.contact_phone?' · '+esc(a.contact_phone):''}</p>`;
+  if(a.hr_name)h+=`<p><strong>👤 联系人：</strong>${esc(a.hr_name)}</p>`;
+  if(a.reason)h+=`<p><strong>💡 评分理由：</strong>${esc(a.reason)}</p>`;
   if(a.notes)h+=`<p><strong>📌 备注：</strong>${esc(a.notes)}</p>`;
-  if(a.messages&&a.messages.length){
-    h+='<p><strong>💬 对话：</strong></p>';
-    a.messages.forEach(m=>h+=`<div class=msg-line><span class="from ${m.from}">[${m.from==='me'?'我':'HR'}]</span>${esc(m.content)} <span style=color:#8b949e;font-size:11px>${(m.time||'').slice(0,16)}</span></div>`);
-  }
   return h||'<span style=color:#8b949e>暂无详细信息</span>';
 }
-
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function toggleDetail(idx,row){
   const el=document.getElementById('detail-'+idx);
   if(expanded&&expanded!==idx){document.getElementById('detail-'+expanded).classList.add('hidden');}
   el.classList.toggle('hidden');
   expanded=el.classList.contains('hidden')?null:idx;
 }
-
 function setPlatformFilter(f){platformFilter=f;render();}
 function setStatusFilter(f){statusFilter=f;render();}
-
+async function saveSettings(){
+  const payload={
+    spreadsheet:{
+      enabled:document.getElementById('set-type').value!=='none',
+      type:document.getElementById('set-type').value,
+      webhook_url:document.getElementById('set-webhook').value.trim(),
+      feishu:{
+        app_id:document.getElementById('set-fapp').value.trim(),
+        app_secret:document.getElementById('set-fsecret').value.trim(),
+        app_token:document.getElementById('set-ftoken').value.trim(),
+        table_id:document.getElementById('set-ftable').value.trim(),
+      }
+    }
+  };
+  const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d=await r.json();
+  if(d.ok){toast('✅ 设置已保存');loadSettings();}
+  else toast('❌ '+d.error);
+}
+async function testSettings(){
+  const st=document.getElementById('settings-status');st.textContent='测试中…';
+  const r=await fetch('/api/settings/test',{method:'POST'});
+  const d=await r.json();
+  st.textContent=d.ok?('✅ '+d.message):('❌ '+d.message);
+}
 function toast(m){
   const t=document.getElementById('toast');t.textContent=m;t.style.opacity='1';
-  setTimeout(()=>t.style.opacity='0',2000);
+  setTimeout(()=>t.style.opacity='0',3000);
 }
 loadAll();
 setInterval(loadData,30000);
 </script></body></html>"""
 
-RESUME_DIR = ROOT / "data" / "resume"
-os.makedirs(RESUME_DIR, exist_ok=True)
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, *a): pass
+    def log_message(self, *a):
+        pass
 
     def do_GET(self):
-        if self.path == '/':                         self._html(HTML)
-        elif self.path == '/api/data':               self._json(self._read_data())
-        elif self.path == '/api/config':             self._json(self._read_config())
-        else:                                         self.send_error(404)
+        if self.path == '/':
+            self._html(HTML)
+        elif self.path == '/api/data':
+            self._json(engine.load_db())
+        elif self.path == '/api/config':
+            self._json(self._read_config())
+        elif self.path == '/api/llm':
+            cfg = load_config()
+            self._json({"base_url": cfg["base_url"], "model": cfg["model"],
+                        "has_key": bool(cfg["api_key"])})
+        elif self.path == '/api/settings':
+            self._json({"spreadsheet": spreadsheet._public(spreadsheet.load_settings())})
+        elif self.path == '/api/env':
+            self._json(self._env_status())
+        else:
+            self.send_error(404)
 
     def do_POST(self):
         if self.path == '/api/upload':
             self._handle_upload()
         elif self.path == '/api/config':
-            length = int(self.headers.get('Content-Length', 0))
-            cfg = json.loads(self.rfile.read(length))
-            self._write_config(cfg)
-            self._json({"ok": True})
+            self._handle_config()
+        elif self.path == '/api/llm':
+            self._handle_llm()
+        elif self.path == '/api/llm/test':
+            self._handle_llm_test()
+        elif self.path == '/api/search':
+            self._handle_search()
+        elif self.path == '/api/apply':
+            self._handle_apply()
+        elif self.path == '/api/status':
+            self._handle_status()
+        elif self.path == '/api/settings':
+            self._handle_settings()
+        elif self.path == '/api/settings/test':
+            self._handle_settings_test()
+        elif self.path == '/api/env/login':
+            self._handle_env_login()
+        elif self.path == '/api/env/check':
+            self._handle_env_check()
         else:
             self.send_error(404)
 
-    def _handle_upload(self):
-        length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(length)
-        ct = self.headers.get('Content-Type', '')
-        if 'multipart' in ct:
-            boundary = ct.split('boundary=')[1].encode()
-            for p in body.split(b'--' + boundary):
-                if b'filename=' in p:
-                    hdr, _, data = p.partition(b'\r\n\r\n')
-                    fn = p.split(b'filename="')[1].split(b'"')[0].decode()
-                    path = os.path.join(RESUME_DIR, fn)
-                    with open(path, 'wb') as f:
-                        f.write(data.rstrip(b'\r\n--'))
-                    extracted = self._parse_resume(path)
-                    extracted['_filename'] = fn
-                    self._json(extracted)
-                    return
-        self._json({'_error': '上传失败'})
-
-    def _parse_resume(self, path):
-        import re
-        result = {}
+    # ---- LLM ----
+    def _handle_llm(self):
         try:
-            text = open(path, encoding='utf-8', errors='ignore').read()[:5000]
-        except:
-            text = open(path, encoding='gbk', errors='ignore').read()[:5000]
+            cfg = self._body_json()
+            existing = load_config()
+            if cfg.get("base_url"):
+                existing["base_url"] = cfg["base_url"]
+            if cfg.get("model"):
+                existing["model"] = cfg["model"]
+            if cfg.get("api_key"):
+                existing["api_key"] = cfg["api_key"]
+            save_config(existing)
+            self._json({"ok": True})
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)})
+
+    def _handle_llm_test(self):
+        try:
+            reply = test_connection()
+            self._json({"ok": True, "reply": reply.strip()[:80]})
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)[:200]})
+
+    # ---- Config ----
+    def _handle_config(self):
+        try:
+            cfg = self._body_json()
+            CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+            self._json({"ok": True})
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)})
+
+    # ---- Search ----
+    def _handle_search(self):
+        if not SEARCH_LOCK.acquire(blocking=False):
+            self._json({"ok": False, "error": "已有搜索正在进行，请稍候"})
+            return
+        try:
+            body = self._body_json()
+            result = engine.run_search(body.get("intent", ""), body.get("city", "南京"))
+            self._json({"ok": True, **result})
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)[:300]})
+        finally:
+            SEARCH_LOCK.release()
+
+    # ---- Apply ----
+    def _handle_apply(self):
+        if not APPLY_LOCK.acquire(blocking=False):
+            self._json({"ok": False, "message": "已有投递在进行中，请稍候"})
+            return
+        try:
+            body = self._body_json()
+            manual = body.pop("_manual", False)
+            if manual:
+                rec = engine.add_application(body)
+                self._json({"ok": True, "message": "已加入记录", "record": rec})
+            else:
+                result = engine.apply_job(body)
+                if result.get("ok"):
+                    self._json({"ok": True, "message": result.get("message", "投递成功")})
+                else:
+                    self._json({"ok": False, "message": result.get("message", "投递失败"),
+                                "need_login": result.get("need_login", False)})
+        except ValueError as e:
+            self._json({"ok": False, "message": str(e)})
+        except Exception as e:
+            self._json({"ok": False, "message": str(e)[:300]})
+        finally:
+            APPLY_LOCK.release()
+
+    # ---- Status ----
+    def _handle_status(self):
+        try:
+            body = self._body_json()
+            url, status = body.get("url", ""), body.get("status", "")
+            if not url or not status:
+                self._json({"ok": False, "error": "缺少 url 或 status"})
+                return
+            self._json(engine.update_status(url, status))
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)[:200]})
+
+    # ---- Spreadsheet settings ----
+    def _handle_settings(self):
+        try:
+            payload = self._body_json()
+            existing = spreadsheet.load_settings()
+            incoming = payload.get("spreadsheet", {})
+            incoming.setdefault("feishu", {})
+            # 密钥留空 = 保留原值
+            if not incoming["feishu"].get("app_secret"):
+                incoming["feishu"]["app_secret"] = existing["spreadsheet"]["feishu"].get("app_secret", "")
+            existing["spreadsheet"] = incoming
+            spreadsheet.save_settings(existing)
+            self._json({"ok": True})
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)})
+
+    def _handle_settings_test(self):
+        self._json(spreadsheet.test_sync())
+
+    # ---- Environment ----
+    def _env_status(self):
+        import browser
+        platforms = []
+        for key, pcfg in engine.load_platforms().items():
+            platforms.append({
+                "key": key,
+                "name": pcfg.get("name", key),
+                "enabled": bool(pcfg.get("enabled")),
+                "requires_browser": bool(pcfg.get("requires_browser")),
+            })
+        return {"camofox": browser.camofox_available(), "platforms": platforms}
+
+    def _handle_env_login(self):
+        import browser
+        body = self._body_json()
+        self._json(browser.open_login(body.get("platform", "")))
+
+    def _handle_env_check(self):
+        import browser
+        body = self._body_json()
+        self._json(browser.check_login(body.get("platform", "")))
+
+    # ---- Upload & resume parse ----
+    def _handle_upload(self):
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(length)
+            ct = self.headers.get('Content-Type', '')
+            if 'multipart' not in ct:
+                self._json({'_error': '上传失败：非 multipart'})
+                return
+            boundary = ct.split('boundary=')[1].encode()
+            for part in body.split(b'--' + boundary):
+                if b'filename=' not in part:
+                    continue
+                hdr, _, data = part.partition(b'\r\n\r\n')
+                fn = part.split(b'filename="')[1].split(b'"')[0].decode(errors="ignore")
+                data = data.rstrip(b'\r\n--')
+                ext = os.path.splitext(fn)[1].lower()
+                if ext not in ('.txt', '.pdf', '.doc', '.docx'):
+                    self._json({'_error': '不支持的文件类型，请上传 TXT/Word/PDF'})
+                    return
+                safe_name = f"{uuid.uuid4().hex[:8]}{ext}"
+                path = RESUME_DIR / safe_name
+                path.write_bytes(data)
+                extracted = self._parse_resume(path)
+                extracted['_filename'] = fn
+                self._json(extracted)
+                return
+            self._json({'_error': '上传失败：未找到文件'})
+        except Exception as e:
+            self._json({'_error': f'上传失败：{e}'})
+
+    def _parse_resume(self, path: Path) -> dict:
+        result = {}
+        ext = path.suffix.lower()
+        text = ""
+        if ext == ".txt":
+            raw = path.read_bytes()
+            text = raw.decode("utf-8", errors="ignore")
+            if len([c for c in text if c == '\ufffd']) > len(text) * 0.1:
+                text = raw.decode("gbk", errors="ignore")
+        elif ext == ".docx":
+            try:
+                with zipfile.ZipFile(path) as z:
+                    xml = z.read("word/document.xml")
+                root = ET.fromstring(xml)
+                ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+                paras = ["".join(t.text or "" for t in p.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"))
+                         for p in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p")]
+                text = "\n".join(p for p in paras if p.strip())
+            except Exception as e:
+                return {"_error": f"Word 解析失败：{e}"}
+        elif ext == ".pdf":
+            try:
+                from pypdf import PdfReader
+            except ImportError:
+                return {"_error": "PDF 解析需要 pypdf：pip install pypdf，或将简历另存为 TXT/Word"}
+            try:
+                reader = PdfReader(str(path))
+                text = "\n".join((p.extract_text() or "") for p in reader.pages)
+            except Exception as e:
+                return {"_error": f"PDF 解析失败：{e}"}
+        elif ext == ".doc":
+            return {"_warn": "旧版 .doc 无法直接解析，请另存为 .docx 或 .txt"}
+
+        text = (text or "")[:5000]
         m = re.search(r'(?:姓名|名字)[:：\s]*([\u4e00-\u9fa5]{2,4})', text)
-        if m: result['name'] = m.group(1)
-        m = re.search(r'(?:学历|教育)[:：\s]*(大专|本科|硕士|博士|中专|高中)', text)
-        if m: result['education'] = m.group(1)
+        if m:
+            result['name'] = m.group(1)
+        m = re.search(r'(?:学历|教育)[:：\s]*(大专|本科|硕士|博士|中专|高中|研究生)', text)
+        if m:
+            result['education'] = m.group(1)
         m = re.search(r'(?:专业)[:：\s]*([\u4e00-\u9fa5]{2,20})', text)
-        if m: result['major'] = m.group(1)
-        m = re.search(r'(?:城市|地点|期望城市)[:：\s]*(北京|上海|广州|深圳|杭州|南京|成都|武汉|苏州|重庆|西安|天津|长沙|郑州)', text)
-        if m: result['cities'] = [m.group(1)]
+        if m:
+            result['major'] = m.group(1)
         m = re.search(r'1[3-9]\d{9}', text)
-        if m: result['phone'] = m.group(0)
-        m = re.search(r'[\w.-]+@[\w.-]+', text)
-        if m: result['email'] = m.group(0)
-        known = ['PLC','plc','CAD','Python','Java','C++','SQL','Excel','电工','自动化','电气','嵌入式','单片机','Linux','ROS','SolidWorks','西门子','三菱','ABB','PCB','FPGA','MATLAB','Office','PS','PR','AE']
+        if m:
+            result['phone'] = m.group(0)
+        known = ['PLC', 'CAD', 'Python', 'Java', 'C++', 'SQL', 'Excel', '电工', '自动化',
+                 '电气', '嵌入式', '单片机', 'Linux', 'ROS', 'SolidWorks', '西门子',
+                 '三菱', 'ABB', 'PCB', 'FPGA', 'MATLAB', 'Office', 'Django', 'FastAPI',
+                 'React', 'Vue', 'Docker', 'Git', 'MySQL', 'Redis']
         found = [k for k in known if k.lower() in text.lower()]
-        if found: result['skills'] = found[:8]
+        if found:
+            result['skills'] = found[:8]
+        if not result:
+            result['_warn'] = '未识别到结构化字段，已将简历保存，可手动填写意向'
         return result
 
-    def _read_data(self):
-        try: return json.loads(DATA_FILE.read_text(encoding="utf-8", errors="ignore"))
-        except: return {"applications": [], "stats": {}}
+    def _body_json(self):
+        length = int(self.headers.get('Content-Length', 0))
+        return json.loads(self.rfile.read(length)) if length else {}
 
     def _read_config(self):
-        try: return json.loads(CONFIG_FILE.read_text(encoding="utf-8", errors="ignore"))
-        except:
-            try: return json.loads(CONFIG_TEMPLATE.read_text(encoding="utf-8", errors="ignore"))
-            except: return {}
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            try:
+                return json.loads(CONFIG_TEMPLATE.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                return {}
 
-    def _write_config(self, cfg):
-        CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8", errors="ignore")
+    def _html(self, h):
+        self._respond(200, 'text/html', h)
 
-    def _html(self, h): self._respond(200, 'text/html', h)
-    def _json(self, d): self._respond(200, 'application/json', json.dumps(d, ensure_ascii=False))
+    def _json(self, d):
+        self._respond(200, 'application/json', json.dumps(d, ensure_ascii=False))
+
     def _respond(self, code, ct, body):
-        self.send_response(code); self.send_header('Content-Type', f'{ct}; charset=utf-8')
-        self.send_header('Access-Control-Allow-Origin', '*'); self.end_headers()
+        self.send_response(code)
+        self.send_header('Content-Type', f'{ct}; charset=utf-8')
+        self.end_headers()
         self.wfile.write(body.encode('utf-8'))
 
+
 if __name__ == '__main__':
-    print(f'JobBot Dashboard → http://localhost:{PORT}', flush=True)
-    http.server.HTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
+    print(f'JobBot Dashboard → http://localhost:{PORT}')
+    print('使用流程：配置 LLM Key → 上传简历/填意向 → 开始搜索 → 点「投递」')
+    http.server.ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()

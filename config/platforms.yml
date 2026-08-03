@@ -1,51 +1,40 @@
 # JobBot 平台配置
-# 每个平台可独立启用/禁用，调整搜索规则
+# 每个平台可独立启用/禁用，调整搜索与投递规则。
+# 搜索关键词留空 = 由 JobBot 从求职意向自动生成。
 
 boss_zhipin:
   enabled: true
   name: "BOSS直聘"
   base_url: "https://www.zhipin.com"
+  login_url: "https://www.zhipin.com/web/user/?ka=header-login"
+  search_url: "https://www.zhipin.com/web/geek/job?query={keyword}&city={city_code}"
 
-  # ===== 搜索关键词（留空 = 由 JobBot 从简历自动生成）=====
   search_keywords: []
   location: "南京"
   city_code: "101190100"
 
-  # ===== 筛选器参数 =====
-  # 求职类型：实习=1902，全职=（留空），不限制=（留空）
-  job_type: ""
-  # 学历要求：大专=202，不限=203，本科=203
-  degree: ""
+  # 需要浏览器自动操作（Camofox），投递前需用户手动登录一次
+  requires_browser: true
 
   # ===== 标题过滤 =====
-  # positive: 标题必须包含至少一个（空=不限制）
-  # negative: 标题包含任意一个 → 直接跳过
+  # negative: 标题包含任意一个 → 直接跳过（可按求职方向自行调整，
+  # 例如找技术岗时不要把 Java/Python 放进排除词）
   title_filter:
-    positive: []
     negative:
       - "销售"
       - "保险"
       - "客服"
-      - "Java"
-      - "PHP"
-      - "Python"
-      - "前端"
-      - ".NET"
-      - "Android"
-      - "iOS"
-      - "算法"
-      - "大数据"
-      - "架构师"
-      - "总监"
-      - "经理"
+      - "普工"
+      - "猎头"
+      - "外包"
 
   # ===== 薪资过滤 =====
   salary_filter:
-    min: 2000       # 最低月薪（低于此跳过）
-    max: 0          # 0 = 无上限
+    min: 0       # 低于此月薪（元）跳过，0 = 不限制
+    max: 0       # 高于此月薪（元）跳过，0 = 无上限
 
   # ===== 学历过滤 =====
-  # 允许的学历标签（空=不限制），常见："大专""中专""不限""学历不限"
+  # 允许的学历标签（空=不限制），如 ["大专", "不限"]
   education_allow: []
 
   # ===== 信任检测 =====
@@ -58,11 +47,8 @@ boss_zhipin:
       - "培训费"
       - "先交"
       - "刷单"
-      - "兼职"
       - "微商"
-      - "代理"
       - "投资"
-      - "理财"
       - "虚拟币"
       - "区块链"
     high_risk_keywords:
@@ -70,7 +56,7 @@ boss_zhipin:
       - "月入过万"
       - "躺赚"
       - "带你赚钱"
-    salary_ceiling: 15000    # 薪资超过此值触发虚高检测
+    salary_ceiling: 0    # 月薪上限超过此值且学历低 → 标记虚高，0 = 关闭
 
 # ===== 前程无忧（51job）=====
 wuyou:
@@ -78,26 +64,30 @@ wuyou:
   name: "前程无忧"
   base_url: "https://we.51job.com"
   login_url: "https://login.51job.com/login.php?lang=c"
+  search_url: "https://we.51job.com/pc/search?jobArea={city_code}&keyword={keyword}&searchType=2&sortType=0"
 
   search_keywords: []
   location: "南京"
   city_code: "070200"
 
+  # 搜索走纯 HTTP API（快）；被 WAF 拦截时自动降级 Chrome headless
+  requires_browser: false
+
   title_filter:
-    positive: []
     negative:
       - "销售"
       - "保险"
       - "客服"
-      - "Java"
-      - "PHP"
-      - "Python"
-      - "前端"
-      - ".NET"
+      - "普工"
+      - "操作工"
+      - "猎头"
+      - "外包"
 
   salary_filter:
-    min: 2000
+    min: 0
     max: 0
+
+  education_allow: []
 
   trust_filter:
     enabled: true
@@ -112,13 +102,23 @@ shixiseng:
   enabled: true
   name: "实习僧"
   base_url: "https://www.shixiseng.com"
+  login_url: "https://passport.shixiseng.com/login"
+  search_url: "https://www.shixiseng.com/interns?keyword={keyword}&city={city}&type=intern"
 
   search_keywords: []
   location: "南京"
 
+  # 需要浏览器自动操作（Camofox）
+  requires_browser: true
+
   title_filter:
-    positive: []
-    negative: ["销售", "客服"]
+    negative: ["销售", "客服", "普工"]
+
+  salary_filter:
+    min: 0
+    max: 0
+
+  education_allow: []
 
   trust_filter:
     enabled: true

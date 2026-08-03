@@ -1,9 +1,8 @@
-# JobBot Agent — 开源通用求职技能包
+# JobBot Agent — 本地 AI 求职助手
 
-## 定位
+一个下载即用、完全跑在你自己电脑上的求职自动化工具：配置一次 LLM API Key，上传简历、填写意向，就能在 **BOSS直聘 / 前程无忧(51job) / 实习僧** 三大平台搜索岗位、AI 评分、一键自动投递，并把投递进度同步到本地看板和在线表格。
 
-一个可分发到任何 AI Agent（Hermes / OpenCode / Claude Code / OpenClaw）的技能包。
-用户提供自己的简历和意向岗位 → Agent 自动对接三平台（BOSS直聘/前程无忧/实习僧）搜索、评分、投递、回复、追踪。
+> 数据全部留在本地，只有调用 LLM 和搜索/投递岗位时需要联网。
 
 ---
 
@@ -11,163 +10,87 @@
 
 | 能力 | 说明 |
 |------|------|
-| **三平台搜索** | BOSS直聘 + 前程无忧(51job) + 实习僧，关键词自动轮换，结果去重 |
-| **智能评分** | LLM 对比 JD 和你的简历，1~5 星评分，只投真正匹配的 |
-| **一键投递** | 确认后自动点击投递，实时验证投递成功状态 |
-| **自动回复** | HR 消息自动识别意图（12 种场景），生成自然回复，去 AI 味 |
-| **发简历** | 自动处理弹窗、选择文件、发送，验证发送成功 |
-| **面试通知** | 检测到面试邀约立即提醒，不私自确认时间 |
-| **状态看板** | 本地 HTML 看板，投递/回复/面试状态一目了然 |
-| **诈骗检测** | 自动识别培训贷、押金诈骗、薪资虚高等可疑岗位 |
-| **零服务器** | 全部跑在本地，数据不上传，Agent 和 API key 都是你自己的 |
+| 三平台搜索 | 51job（HTTP API + WAF 自动降级）、BOSS直聘 / 实习僧（Camofox 浏览器） |
+| AI 智能评分 | LLM 对比 JD 与你的简历，1~5 星，只展示值得投的岗位 |
+| 一键自动投递 | 点「投递」自动打开岗位并操作投递，成功后验证「已发送/投递成功」 |
+| 简历解析 | 上传 TXT / Word / PDF，自动提取姓名、学历、专业、技能填到意向里 |
+| 投递看板 | 本地 Dashboard：总览统计、状态流转（已投递→已回复→约面试→Offer/拒绝）、筛选、CSV 导出 |
+| 在线表格同步 | 投递记录自动推送到 Webhook 或飞书多维表格 |
+| 诈骗检测 | 关键词/薪资虚高识别，可疑岗位打标提示 |
+| 登录门禁 | 平台未登录/验证码时明确提示，绝不绕过 |
 
 ---
 
-## 支持平台
+## 快速开始（三步）
 
-| 平台 | 接入文件 | 安装方式 | 一句话启动 |
-|------|---------|---------|-----------|
-| **OpenCode** | `AGENTS.md` | 放到项目目录或 `~/.config/opencode/AGENTS.md` | `opencode` 启动后说"帮我找工作" |
-| **Hermes** | `SKILL.md` | `skill_view('jobbot')` 加载 | 说"加载 jobbot 技能" |
-| **OpenClaw** | `SKILL.md` | 放到 `~/.openclaw/skills/jobbot/` | 说"用 jobbot 帮我找工作" |
-| **Claude Code** | `AGENTS.md` | 项目根目录 `CLAUDE.md` 写入 `@AGENTS.md` | `claude` 启动后说"帮我找工作" |
+### 1. 环境要求
 
-> 💡 不锁定平台。Skill 文件是通用 Markdown，任何能读文件的 AI Agent 都能用。
+- Windows / macOS / Linux
+- Python 3.10+（https://python.org）
+- Node.js 16+（仅自动投递与 BOSS/实习僧搜索需要，用于 Camofox 浏览器）
 
----
-
-## 快速开始
-
-### 前提条件
-
-- Python 3.10+
-- Node.js 16+（Camofox 浏览器引擎）
-- 一个已安装的 AI Agent（Hermes / OpenCode / Claude Code）
-
-### 三步跑起来
+### 2. 启动
 
 ```bash
-# 1. 安装 Camofox 浏览器
-npm install -g @askjo/camofox-browser
-
-# 2. 环境检测
-python scripts/setup.py
-
-# 3. 填写简历
-cp config/user_profile_template.json config/user_profile.json
-# 编辑 user_profile.json，填写你的基本信息
+python start.py
 ```
 
-### 加载到你的 Agent
+浏览器自动打开 `http://localhost:9379`。
 
-```bash
-# OpenCode（推荐 — 社区最大，安装最简单）
-cp AGENTS.md ~/.config/opencode/AGENTS.md
-opencode
-# 输入：帮我找工作
+### 3. 在页面里完成三件事
 
-# Hermes
-# 在对话中说：加载 jobbot 技能
+1. **配置 AI**：填写 LLM Base URL + API Key（DeepSeek / Kimi / 通义 / OpenAI 等任何 OpenAI 兼容接口），点「测试连接」。
+2. **上传简历 / 填写意向**：上传简历（或直接写"本科计算机，南京后端实习，Python"），点「保存意向」。
+3. **搜索与投递**：点「开始搜索」→ 查看 AI 评分结果 → 点「🚀 投递」自动投递；或点「加入记录」手动记录。
 
-# OpenClaw
-mkdir -p ~/.openclaw/skills/jobbot
-cp SKILL.md ~/.openclaw/skills/jobbot/
+> 51job 搜索无需登录；BOSS直聘 / 实习僧 搜索与三大平台自动投递需要安装 Camofox 浏览器并登录一次（页面「检测环境」会引导）。投递前请确认各平台简历已完善。
 
-# Claude Code
-echo "@AGENTS.md" > CLAUDE.md
-claude
-```
-
-详细安装指南见 [SETUP.md](SETUP.md)。
+**登录门禁**：遇到平台未登录时，JobBot **不会自动登录、不填验证码、不绕过**。它会：把浏览器停在登录页 → 在 Dashboard 显示「🔐 需要手动登录」提示 → 等你手动登录完成后点「已登录，继续」→ 再继续搜索/投递。未确认登录前不会执行任何投递操作。
 
 ---
 
-## 招聘平台
+## 在线表格同步
 
-| 平台 | 搜索方式 | 投递方式 | 风险 | 状态 |
-|------|---------|---------|------|------|
-| **BOSS直聘** | 浏览器操作 | JS 事件派发 | IP 封禁风险 | ✅ |
-| **前程无忧(51job)** | 纯 API（零验证码） | 浏览器点击 | 低 | ✅ |
-| **实习僧** | SSR + 字体解码 | 浏览器投递 | 低 | ✅ |
-| 智联招聘 | — | — | — | 待接入 |
+在 Dashboard「在线表格同步」设置：
 
----
+- **Webhook**：填任意 webhook 地址（可对接 Zapier / Make / 自建服务），每次新增/更新记录推送 JSON。
+- **飞书多维表格**：在 open.feishu.cn 创建企业自建应用 → 开通多维表格权限 → 填入 app_id / app_secret / 多维表格 app_token / table_id。
 
-## Agent 对话示例
-
-```
-你：帮我找工作
-Agent：你好！我是 JobBot 求职助手。请告诉我你的基本信息……
-
-你：我叫张三，本科计算机，2027年毕业，想在南京找后端开发实习
-Agent：✅ 配置完成！已生成 7 个搜索关键词。现在开始搜索吗？
-
-你：搜
-Agent：【搜索中…】BOSS 找到 15 个，51job 找到 23 个，实习僧 5 个
-      【评分完成】⭐⭐⭐⭐⭐ 2个，⭐⭐⭐⭐ 5个，⭐⭐⭐ 8个
-      要投哪些？"全投" / "投前3个" / "跳过XX公司"
-
-你：投前5个
-Agent：【投递中…】✅ 5个投递成功，看板已更新
-      data/dashboard.html
-
-你：检查消息
-Agent：【扫描中…】BOSS 有 2 条新消息，51job 有 1 条
-      南暄禾雅 HR："你好啊，可以聊一聊~"
-      我的建议回复："好的您好。我是计算机本科，已经在南京了随时到岗。我发一下简历您看看？"
-      要发吗？
-
-你：发
-Agent：✅ 已发送 + 简历已发
-```
+开启后，新增投递或更新状态会自动同步。
 
 ---
 
-## 文件结构
+## 目录结构
 
 ```
 jobbot-agent/
-├── SKILL.md                    ← Hermes / OpenClaw 技能文件
-├── AGENTS.md                   ← OpenCode / Claude Code 指令文件
-├── README.md                   ← 本文件
-├── SETUP.md                    ← 详细安装指南
-├── requirements.txt            ← Python 依赖
-├── config/
-│   ├── user_profile_template.json  ← 简历模板
-│   └── platforms.yml              ← 平台配置
-├── references/                     ← 参考文档
-│   ├── boss-pitfalls.md            ← BOSS 直聘陷阱全解（13个）
-│   ├── wuyou-api.md                ← 51job API 完整文档
-│   ├── reply-sop.md                ← 回复话术 SOP（12种场景）
-│   └── trust-detection.md          ← 诈骗岗位检测规则
-├── scripts/
-│   ├── setup.py                    ← 一键环境检测
-│   └── report.py                   ← HTML 看板生成
-└── data/                           ← 投递记录（本地生成）
+├─ start.py              # 一键启动（端口冲突自动检测）
+├─ dashboard.py          # 本地看板（单文件，纯 stdlib）
+├─ engine.py             # 核心引擎：关键词/搜索/评分/记录/状态
+├─ platforms.py          # 三平台搜索 + 自动投递（含 WAF/登录墙处理）
+├─ browser.py            # Camofox 浏览器客户端
+├─ llm.py                # OpenAI 兼容 LLM 客户端
+├─ spreadsheet.py        # 在线表格同步（webhook / 飞书）
+├─ config/
+│  ├─ platforms.yml      # 平台开关与过滤规则（标题/薪资/学历/信任检测）
+│  ├─ llm.json           # LLM 配置（本地，不入库）
+│  ├─ settings.json      # 在线表格同步配置（本地，不入库）
+│  └─ user_profile.json  # 求职意向（本地，不入库）
+├─ data/                 # 投递记录与看板数据（本地）
+└─ references/           # 平台对接参考资料
 ```
 
----
+## 配置说明
 
-## 操作铁律
+- `config/platforms.yml`：每个平台的 `enabled` 开关、`title_filter.negative` 排除词、`salary_filter` 薪资范围、`education_allow` 学历白名单、`trust_filter` 信任检测关键词。排除词按你的求职方向调整（例如找技术岗时不要放 Java/Python）。
+- `config/llm.json`：可在 Dashboard 填写，也可直接编辑；支持任意 OpenAI 兼容接口。
 
-Agent 在运行 JobBot 时必须遵守：
+## 已知边界
 
-1. **投递后必须验证** — 不假设成功，每次检查发送状态
-2. **回复必须去 AI 味** — 学生语气，简短自然。不说"感谢您的关注""希望能跟着前辈学习"
-3. **面试邀约立即通知** — 不私自确认时间，等用户决策
-4. **每次重读配置** — 用户可能改了简历或偏好，不依赖记忆
-5. **遇到障碍主动告知** — 登录过期/验证码/IP封禁 → 通知用户，不卡死
+- BOSS直聘 / 实习僧 的页面结构可能随平台改版变化，搜索或投递失败会给出明确提示，请按提示人工处理。
+- 频繁操作可能触发平台风控（IP 封禁/验证码），遇到时放慢节奏或更换网络。
+- 自动投递依赖 Camofox 浏览器（约 150MB），仅投递功能需要安装。
 
----
-
-## 项目故事
-
-手动搜索、浏览、投递、回复 HR 消息，每天花 2-3 小时。用 AI Agent 自动化后，整个流程压缩到 30 分钟。支持三平台，开源可分发。
-
-如果你也在找工作，或者在帮家人朋友找——试试让 AI 帮你跑。
-
----
-
-## 许可证
+## 许可
 
 MIT © 2026 weiwei-run
