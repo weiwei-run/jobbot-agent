@@ -233,6 +233,7 @@ def _search_one_platform(platform_key: str, keyword: str, city: str, pcfg: dict,
 
 def run_search(intent: str, city: str = "南京", page_size: int = 20) -> dict:
     """一键流程：关键词 → 各启用平台搜索 → 去重 → LLM 评分。"""
+    intent = re.sub(r"【简历解析】", "", intent or "").strip()
     keywords = generate_keywords(intent)
     platforms = enabled_platforms()
     if not platforms:

@@ -132,7 +132,7 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
     </div>
     <div>
       <label>意向描述（城市、学历、专业、目标岗位、技能…）</label>
-      <textarea id=cfg-intent rows=5 placeholder="例：本科计算机，2027毕业，找南京 Python 后端开发实习，会用 Django/FastAPI，期望薪资3000-6000" oninput=onIntentEdit()></textarea>
+      <textarea id=cfg-intent rows=5 placeholder="例：本科计算机，2027毕业，找南京 Python 后端开发实习，会用 Django/FastAPI，期望薪资3000-6000" oninput=scheduleSave()></textarea>
       <div class=row>
         <label style="margin:0">目标城市</label>
         <input type=text id=cfg-city value="南京" style="width:120px" oninput=scheduleSave()>
@@ -221,7 +221,6 @@ let llmCfg={};
 let config={};
 let settings={};
 let loginPending=[];
-let _intentAuto=false;
 let saveTimer=null;
 let platformFilter='all',statusFilter='all';
 let sortKey='applied_at',sortDir='desc';
@@ -233,7 +232,6 @@ async function loadConfig(){
   try{const r=await fetch('/api/config');config=await r.json();}catch(e){}
   if(config.intent){document.getElementById('cfg-intent').value=config.intent;showApp();}
   if(config.city)document.getElementById('cfg-city').value=config.city;
-  _intentAuto=!!config.intent_auto;
 }
 async function loadLLM(){
   try{const r=await fetch('/api/llm');llmCfg=await r.json();
@@ -258,18 +256,13 @@ function showApp(){
     document.getElementById(id).classList.remove('hidden');
   });
 }
-function onIntentEdit(){
-  _intentAuto=false;
-  scheduleSave();
-}
 function scheduleSave(){
   clearTimeout(saveTimer);
   saveTimer=setTimeout(autoSaveConfig,1200);
 }
 async function autoSaveConfig(){
   const cfg={intent:document.getElementById('cfg-intent').value.trim(),
-             city:document.getElementById('cfg-city').value.trim()||'南京',
-             intent_auto:_intentAuto};
+             city:document.getElementById('cfg-city').value.trim()||'南京'};
   try{
     await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
   }catch(e){}
@@ -335,32 +328,30 @@ async function uploadResume(input){
   if(d.skills&&d.skills.length)parsed.push('技能:'+d.skills.join('、'));
   if(d._error){toast('❌ '+d._error);return;}
   if(parsed.length){
+    const block='【简历解析】'+parsed.join('，');
     const cur=document.getElementById('cfg-intent').value.trim();
-    const newText=parsed.join('，');
-    if(_intentAuto||!cur){
-      // 新简历直接刷新（替换）旧的自动解析内容
-      document.getElementById('cfg-intent').value=newText;
-      _intentAuto=true;
-      toast('✅ 已用新简历刷新意向描述');
+    const idx=cur.indexOf('【简历解析】');
+    let next;
+    if(idx>=0){
+      // 已有旧简历解析块 → 只替换该块，保留手动填写的意向
+      const head=cur.slice(0,idx).replace(/[，,]\s*$/,'');
+      next=(head?head+'，':'')+block;
     }else{
-      // 用户手动编辑过：保留手动内容，只补充新简历里缺失的字段
-      const missing=parsed.filter(p=>cur.indexOf(p.split(':')[0])<0);
-      document.getElementById('cfg-intent').value=cur+(missing.length?('，'+missing.join('，')):'');
-      _intentAuto=false;
-      toast(missing.length?('✅ 已补充新简历字段（'+missing.length+' 项）'):'✅ 简历已保存，手动编辑内容保持不变');
+      next=cur?cur+'，'+block:block;
     }
+    document.getElementById('cfg-intent').value=next;
     if(d.city)document.getElementById('cfg-city').value=d.city;
     showApp();
-    await autoSaveConfig();
+    toast('✅ 已用新简历刷新意向描述（手动填写部分保留）');
   }else{
     toast('✅ 简历已保存（未识别到结构化信息，可手动填写意向）');
     showApp();
   }
+  await autoSaveConfig();
 }
 async function saveConfig(){
   const cfg={intent:document.getElementById('cfg-intent').value.trim(),
-             city:document.getElementById('cfg-city').value.trim()||'南京',
-             intent_auto:_intentAuto};
+             city:document.getElementById('cfg-city').value.trim()||'南京'};
   const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
   const d=await r.json();
   if(d.ok){showApp();toast('✅ 意向已保存');}
@@ -839,7 +830,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         m = re.search(r'(?:专业)[:：\s]*([\u4e00-\u9fa5]{2,20})', text)
         if m:
             result['major'] = m.group(1)
-        m = re.search(r'(?:求职意向|意向岗位|应聘岗位|目标岗位)[:：\s]*([\u4e00-\u9fa5A-Za-z0-9、，,()（）/+ ]{2,40})', text)
+        m = re.search(r'(?:求职意向|意向岗位|应聘岗位|目标岗位)[:：\s]*((?:(?!期望城市|目标城市|意向城市|现居|工作地点|手机|技能|学历|专业|姓名|求职意向)[\u4e00-\u9fa5A-Za-z0-9、，,()（）/+ ]){2,40})', text)
         if m:
             result['position'] = m.group(1).strip()[:40]
         city = None
