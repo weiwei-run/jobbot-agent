@@ -19,6 +19,37 @@ CAMOFOX_PORT = 9377
 BASE = f"http://localhost:{CAMOFOX_PORT}"
 USER_ID = "jobbot"
 
+_BOSS_LOGIN_STATE_JS = r"""
+(() => {
+  const text = document.body.innerText;
+  if (text.includes('验证码登录') || text.includes('APP扫码登录')) return 'logged_out';
+  // 可见的「登录/注册」按钮（排除 is-login 这类状态类容器）
+  const btns = Array.from(document.querySelectorAll('a,button,[class*=btn],[class*=Btn]')).filter(e =>
+    e.offsetParent !== null && e.offsetWidth > 0 && e.offsetHeight > 0 &&
+    /^\s*(登录|注册|立即登录|登录\/注册)\s*$/.test((e.innerText || '').trim())
+  );
+  if (btns.length > 0) return 'logged_out';
+  const userMark = !!document.querySelector(
+      '.header-user, [class*=avatar], [class*=Avatar], [class*=user-info], [class*=userInfo], .user-name, .username')
+    || text.includes('退出登录') || text.includes('账号设置');
+  if (userMark) return 'logged_in';
+  return 'unknown';
+})()
+"""
+
+_SXS_LOGIN_STATE_JS = r"""
+(() => {
+  const wall = Array.from(document.querySelectorAll('.outer-auth, [class*=auth], [class*=Auth]'))
+    .some(e => e.offsetParent !== null && e.offsetWidth > 0 && e.offsetHeight > 0);
+  if (wall) return 'logged_out';
+  const userEl = Array.from(document.querySelectorAll(
+      '[class*=header] [class*=avatar], [class*=Avatar], [class*=user], [class*=User]'))
+    .find(e => e.offsetParent !== null && e.offsetWidth > 0 && e.offsetHeight > 0);
+  if (userEl) return 'logged_in';
+  return 'unknown';
+})()
+"""
+
 
 def js_bool(v) -> bool:
     """Camofox evaluate 返回的 JS 布尔是字符串 'true'/'false'，统一转成 Python bool。"""
@@ -191,19 +222,25 @@ def check_login(platform: str) -> dict:
         if "login" in url.lower() or "passport" in url.lower():
             return {"ok": False, "url": url, "message": "未登录，请打开登录页完成登录"}
         if platform == "boss_zhipin":
-            has_login_btn = evaluate(tab, "!!document.querySelector('.login-btn, [class*=login], [class*=Login]')")
-            if js_bool(has_login_btn):
+            state = (evaluate(tab, _BOSS_LOGIN_STATE_JS) or "").strip()
+            if state == "logged_out":
                 return {"ok": False, "url": url, "message": "未登录，请打开登录页完成登录"}
+            if state == "logged_in":
+                return {"ok": True, "url": url, "message": "已登录"}
+            # unknown：无登录墙也无登录按钮，按已登录继续（后续搜索/投递会再次校验）
+            return {"ok": True, "url": url, "message": "未检测到登录拦截，按已登录处理"}
         if platform == "wuyou":
             logged_in_mark = evaluate(tab,
                 "document.body.innerText.includes('退出') || document.body.innerText.includes('我的简历')")
             if not js_bool(logged_in_mark):
                 return {"ok": False, "url": url, "message": "未检测到登录状态（未看到「退出/我的简历」）"}
         if platform == "shixiseng":
-            logged_in_mark = evaluate(tab,
-                "!!document.querySelector('.header-user, [class*=user] [class*=avatar], [class*=User]')")
-            if not js_bool(logged_in_mark):
-                return {"ok": False, "url": url, "message": "未检测到登录状态，请先登录"}
+            state = (evaluate(tab, _SXS_LOGIN_STATE_JS) or "").strip()
+            if state == "logged_out":
+                return {"ok": False, "url": url, "message": "未登录，请打开登录页完成登录"}
+            if state == "logged_in":
+                return {"ok": True, "url": url, "message": "已登录"}
+            return {"ok": True, "url": url, "message": "未检测到登录拦截，按已登录处理"}
         return {"ok": True, "url": url, "message": "已登录"}
     finally:
         close_tab(tab)
