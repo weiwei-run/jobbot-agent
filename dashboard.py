@@ -836,13 +836,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif ext == ".pdf":
             try:
                 from pypdf import PdfReader
-            except ImportError:
-                return "", "PDF 解析需要 pypdf：pip install pypdf，或将简历另存为 TXT/Word"
-            try:
                 reader = PdfReader(str(path))
                 text = "\n".join((p.extract_text() or "") for p in reader.pages)
-            except Exception as e:
-                return "", f"PDF 解析失败：{e}"
+            except Exception:
+                text = ""
+            if not text.strip():
+                # 无 pypdf 或提取失败 → 用内置零依赖提取器
+                try:
+                    from pdftext import extract_pdf_text
+                    text = extract_pdf_text(path.read_bytes())
+                except Exception:
+                    text = ""
+            if not text.strip():
+                return "", ("这份 PDF 无法直接读取文字（可能是扫描件/图片版或加密 PDF）。"
+                            "建议用 Word/WPS 打开后另存为 docx 再上传，或直接在下方手动填写求职意向。")
         elif ext == ".doc":
             return "", "旧版 .doc 无法直接解析，请另存为 .docx 或 .txt"
         return text[:8000], warn
