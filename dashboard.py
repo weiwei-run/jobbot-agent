@@ -222,6 +222,7 @@ let config={};
 let settings={};
 let loginPending=[];
 let saveTimer=null;
+let _resumeParse='';
 let platformFilter='all',statusFilter='all';
 let sortKey='applied_at',sortDir='desc';
 let expanded=null;
@@ -230,8 +231,17 @@ async function loadAll(){await Promise.all([loadData(),loadConfig(),loadLLM(),lo
 async function loadData(){const r=await fetch('/api/data');data=await r.json();}
 async function loadConfig(){
   try{const r=await fetch('/api/config');config=await r.json();}catch(e){}
-  if(config.intent){document.getElementById('cfg-intent').value=config.intent;showApp();}
+  let intent=config.intent||'';
+  // 兼容旧版带【简历解析】标记的配置：自动拆成 手动意向 + 解析块
+  _resumeParse=config.resume_parse||'';
+  const mIdx=intent.indexOf('【简历解析】');
+  if(mIdx>=0){
+    _resumeParse=intent.slice(mIdx+6).replace(/^[，,]\s*/,'')||'';
+    intent=intent.slice(0,mIdx).replace(/[，,]\s*$/,'');
+  }
+  document.getElementById('cfg-intent').value=intent?(intent+(_resumeParse?'，'+_resumeParse:'')):_resumeParse;
   if(config.city)document.getElementById('cfg-city').value=config.city;
+  if(intent||_resumeParse)showApp();
 }
 async function loadLLM(){
   try{const r=await fetch('/api/llm');llmCfg=await r.json();
@@ -260,8 +270,22 @@ function scheduleSave(){
   clearTimeout(saveTimer);
   saveTimer=setTimeout(autoSaveConfig,1200);
 }
+function splitIntent(cur){
+  let intent=(cur||'').trim(), resumeParse=_resumeParse;
+  if(resumeParse){
+    const idx=(cur||'').lastIndexOf(resumeParse);
+    if(idx>=0){
+      intent=cur.slice(0,idx).replace(/[，,]\s*$/,'').trim();
+    }else{
+      // 解析块被手动改过：整段视为手动意向，解析块归零
+      intent=cur.trim(); resumeParse='';
+    }
+  }
+  return {intent:intent, resume_parse:resumeParse};
+}
 async function autoSaveConfig(){
-  const cfg={intent:document.getElementById('cfg-intent').value.trim(),
+  const sp=splitIntent(document.getElementById('cfg-intent').value);
+  const cfg={intent:sp.intent, resume_parse:sp.resume_parse,
              city:document.getElementById('cfg-city').value.trim()||'南京'};
   try{
     await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
@@ -328,21 +352,13 @@ async function uploadResume(input){
   if(d.skills&&d.skills.length)parsed.push('技能:'+d.skills.join('、'));
   if(d._error){toast('❌ '+d._error);return;}
   if(parsed.length){
-    const block='【简历解析】'+parsed.join('，');
-    const cur=document.getElementById('cfg-intent').value.trim();
-    const idx=cur.indexOf('【简历解析】');
-    let next;
-    if(idx>=0){
-      // 已有旧简历解析块 → 只替换该块，保留手动填写的意向
-      const head=cur.slice(0,idx).replace(/[，,]\s*$/,'');
-      next=(head?head+'，':'')+block;
-    }else{
-      next=cur?cur+'，'+block:block;
-    }
-    document.getElementById('cfg-intent').value=next;
+    const newParse=parsed.join('，');
+    const sp=splitIntent(document.getElementById('cfg-intent').value);
+    _resumeParse=newParse;
+    document.getElementById('cfg-intent').value=sp.intent?(sp.intent+'，'+newParse):newParse;
     if(d.city)document.getElementById('cfg-city').value=d.city;
     showApp();
-    toast('✅ 已用新简历刷新意向描述（手动填写部分保留）');
+    toast('✅ 已用新简历刷新意向描述');
   }else{
     toast('✅ 简历已保存（未识别到结构化信息，可手动填写意向）');
     showApp();
@@ -350,7 +366,8 @@ async function uploadResume(input){
   await autoSaveConfig();
 }
 async function saveConfig(){
-  const cfg={intent:document.getElementById('cfg-intent').value.trim(),
+  const sp=splitIntent(document.getElementById('cfg-intent').value);
+  const cfg={intent:sp.intent, resume_parse:sp.resume_parse,
              city:document.getElementById('cfg-city').value.trim()||'南京'};
   const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
   const d=await r.json();
