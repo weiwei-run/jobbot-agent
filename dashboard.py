@@ -348,6 +348,7 @@ async function uploadResume(input){
   if(d.name)parsed.push('姓名:'+d.name);
   if(d.education)parsed.push('学历:'+d.education);
   if(d.major)parsed.push('专业:'+d.major);
+  if(d.school)parsed.push('学校:'+d.school);
   if(d.position)parsed.push('意向岗位:'+d.position);
   if(d.skills&&d.skills.length)parsed.push('技能:'+d.skills.join('、'));
   if(d._error){toast('❌ '+d._error);return;}
@@ -841,12 +842,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         m = re.search(r'(?:姓名|名字)[:：\s]*([\u4e00-\u9fa5]{2,4})', text)
         if m:
             result['name'] = m.group(1)
-        m = re.search(r'(?:学历|教育)[:：\s]*(大专|本科|硕士|博士|中专|高中|研究生)', text)
+        DEGREE = '大专|本科|硕士|博士|中专|高中|研究生'
+        # 学历：标准格式「学历：本科」
+        m = re.search(r'(?:学历|教育)[:：\s]*(' + DEGREE + ')', text)
         if m:
             result['education'] = m.group(1)
-        m = re.search(r'(?:专业)[:：\s]*([\u4e00-\u9fa5]{2,20})', text)
+        # 学校 + 学历 + 专业 同行（如：江西服装学院 本科 播音与主持艺术 2018-2022）
+        m = re.search(r'([\u4e00-\u9fa5]{2,20}(?:大学|学院|学校))[\s　]*(' + DEGREE + r')[\s　]*([\u4e00-\u9fa5A-Za-z（）()]{2,20})', text)
         if m:
-            result['major'] = m.group(1)
+            result['school'] = m.group(1)
+            result.setdefault('education', m.group(2))
+            result.setdefault('major', m.group(3))
+        # 学历：非标准格式「27岁 | 本科 | 党员」
+        if 'education' not in result:
+            m = re.search(r'\d+\s*岁[^。\n]{0,20}[|｜]\s*(' + DEGREE + ')', text)
+            if m:
+                result['education'] = m.group(1)
+        # 学历：全文兜底（简历里出现「本科背景」等）
+        if 'education' not in result:
+            m = re.search('(' + DEGREE + ')', text)
+            if m:
+                result['education'] = m.group(1)
+        # 专业：标准格式「专业：播音与主持艺术」
+        if 'major' not in result:
+            m = re.search(r'(?:专业)[:：\s]*([\u4e00-\u9fa5]{2,20})', text)
+            if m:
+                result['major'] = m.group(1)
         m = re.search(r'(?:求职意向|意向岗位|应聘岗位|目标岗位)[:：\s]*((?:(?!期望城市|目标城市|意向城市|现居|工作地点|手机|技能|学历|专业|姓名|求职意向)[\u4e00-\u9fa5A-Za-z0-9、，,()（）/+ ]){2,40})', text)
         if m:
             result['position'] = m.group(1).strip()[:40]
