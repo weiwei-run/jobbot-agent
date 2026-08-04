@@ -8,6 +8,7 @@ import http.server
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import uuid
@@ -18,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import engine  # noqa: E402
 import spreadsheet  # noqa: E402
-from llm import load_config, save_config, test_connection  # noqa: E402
+from llm import chat_json, load_config, save_config, test_connection  # noqa: E402
 
 PORT = 9379
 ROOT = Path(__file__).parent
@@ -123,7 +124,7 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
   <h3 id=config-title>🚀 第二步：简历与求职意向</h3>
   <div class=grid2>
     <div>
-      <label>上传简历（TXT / Word / PDF）</label>
+      <label>上传简历（TXT / Word / PDF，AI 自动解析）</label>
       <div id=upload-area style="border:2px dashed var(--border);border-radius:8px;padding:14px;text-align:center;cursor:pointer;margin-bottom:10px" onclick="document.getElementById('resume-file').click()">
         <input type=file id=resume-file accept=".pdf,.doc,.docx,.txt" style=display:none onchange="uploadResume(this)">
         📎 点击上传 <span id=resume-name style=color:var(--good)></span>
@@ -338,6 +339,7 @@ async function testLLM(){
 }
 async function uploadResume(input){
   if(!input.files[0])return;
+  document.getElementById('resume-parse').textContent='⏳ AI 解析简历中（约10~30秒，需已配置 LLM Key）…';
   const fd=new FormData();fd.append('file',input.files[0]);
   const r=await fetch('/api/upload',{method:'POST',body:fd});
   const d=await r.json();
@@ -347,10 +349,15 @@ async function uploadResume(input){
   let parsed=[];
   if(d.name)parsed.push('姓名:'+d.name);
   if(d.education)parsed.push('学历:'+d.education);
-  if(d.major)parsed.push('专业:'+d.major);
   if(d.school)parsed.push('学校:'+d.school);
+  if(d.major)parsed.push('专业:'+d.major);
   if(d.position)parsed.push('意向岗位:'+d.position);
+  if(d.city)parsed.push('目标城市:'+d.city);
+  if(d.salary)parsed.push('期望薪资:'+d.salary);
+  if(d.graduate_year)parsed.push('毕业年份:'+d.graduate_year);
+  if(d.certificates&&d.certificates.length)parsed.push('证书:'+d.certificates.join('、'));
   if(d.skills&&d.skills.length)parsed.push('技能:'+d.skills.join('、'));
+  if(d.experience)parsed.push('经历:'+d.experience);
   if(d._error){toast('❌ '+d._error);return;}
   if(parsed.length){
     const newParse=parsed.join('，');
@@ -805,10 +812,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self._json({'_error': f'上传失败：{e}'})
 
-    def _parse_resume(self, path: Path) -> dict:
-        result = {}
+    def _extract_text(self, path: Path) -> tuple[str, str]:
+        """抽取文件全文文本。返回 (文本, 警告)。"""
         ext = path.suffix.lower()
         text = ""
+        warn = ""
         if ext == ".txt":
             raw = path.read_bytes()
             text = raw.decode("utf-8", errors="ignore")
@@ -824,19 +832,58 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          for p in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p")]
                 text = "\n".join(p for p in paras if p.strip())
             except Exception as e:
-                return {"_error": f"Word 解析失败：{e}"}
+                return "", f"Word 解析失败：{e}"
         elif ext == ".pdf":
             try:
                 from pypdf import PdfReader
             except ImportError:
-                return {"_error": "PDF 解析需要 pypdf：pip install pypdf，或将简历另存为 TXT/Word"}
+                return "", "PDF 解析需要 pypdf：pip install pypdf，或将简历另存为 TXT/Word"
             try:
                 reader = PdfReader(str(path))
                 text = "\n".join((p.extract_text() or "") for p in reader.pages)
             except Exception as e:
-                return {"_error": f"PDF 解析失败：{e}"}
+                return "", f"PDF 解析失败：{e}"
         elif ext == ".doc":
-            return {"_warn": "旧版 .doc 无法直接解析，请另存为 .docx 或 .txt"}
+            return "", "旧版 .doc 无法直接解析，请另存为 .docx 或 .txt"
+        return text[:8000], warn
+
+    def _llm_parse(self, text: str) -> dict | None:
+        """LLM 分析简历全文，提取结构化信息。失败返回 None。"""
+        prompt = (
+            "你是简历信息提取助手。请从简历文本中提取求职者信息，只返回 JSON（不要 markdown 包裹）。\n"
+            "字段不存在就填空字符串或空列表，不要编造：\n"
+            '{"name":"姓名","education":"最高学历(大专/本科/硕士/博士/中专/高中)","school":"毕业学校",'
+            '"major":"专业","position":"求职意向/意向岗位(多个用、分隔)","skills":["技能"],'
+            '"city":"期望/目标城市","salary":"期望薪资","graduate_year":毕业年份(数字或空),'
+            '"work_years":"工作年限","certificates":["证书"],"experience":"用一句话概括经历亮点(50字内)"}\n'
+            f"简历文本：\n{text}"
+        )
+        try:
+            data = chat_json([{"role": "user", "content": prompt}], temperature=0.1)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        result: dict = {}
+        for key in ("name", "education", "school", "major", "position", "city",
+                    "salary", "work_years", "experience"):
+            v = data.get(key)
+            if isinstance(v, str) and v.strip():
+                result[key] = v.strip()[:60]
+        gv = data.get("graduate_year")
+        if isinstance(gv, (int, str)) and str(gv).strip() and str(gv) != "0":
+            result["graduate_year"] = str(gv).strip()[:8]
+        for key in ("skills", "certificates"):
+            v = data.get(key)
+            if isinstance(v, list):
+                cleaned = [str(x).strip() for x in v if str(x).strip()]
+                if cleaned:
+                    result[key] = cleaned[:12]
+        return result if result else None
+
+    def _regex_parse(self, text: str) -> dict:
+        """规则解析兜底（LLM 不可用时的降级方案）。"""
+        result: dict = {}
 
         text = (text or "")[:5000]
         m = re.search(r'(?:姓名|名字)[:：\s]*([\u4e00-\u9fa5]{2,4})', text)
@@ -892,8 +939,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         found = [k for k in known if k.lower() in text.lower()]
         if found:
             result['skills'] = found[:8]
+        return result
+
+    def _parse_resume(self, path: Path) -> dict:
+        """简历解析：抽取全文 → LLM 分析 → 失败降级规则解析。"""
+        text, warn = self._extract_text(path)
+        if not text:
+            return {"_warn": warn or "未能从文件中提取到文本内容"}
+        result = self._llm_parse(text)
+        if result:
+            if warn:
+                result["_warn"] = warn
+            return result
+        result = self._regex_parse(text)
         if not result:
-            result['_warn'] = '未识别到结构化字段，已将简历保存，可手动填写意向'
+            return {"_warn": warn or "未识别到结构化信息，已将简历保存，可手动填写意向"}
+        result["_warn"] = "LLM 解析不可用，已用规则解析（配置 API Key 后可启用 AI 解析）"
         return result
 
     def _body_json(self):
@@ -923,6 +984,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        if s.connect_ex(("127.0.0.1", PORT)) == 0:
+            print(f"⚠️ 端口 {PORT} 已被占用：JobBot 可能已在运行，请先关闭旧实例再启动（或直接访问 http://localhost:{PORT}）。")
+            sys.exit(1)
     print(f'JobBot Dashboard → http://localhost:{PORT}')
     print('使用流程：配置 LLM Key → 上传简历/填意向 → 开始搜索 → 点「投递」')
     http.server.ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
