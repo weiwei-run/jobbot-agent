@@ -24,6 +24,8 @@ USER_ID = "jobbot"
 _CAMOFOX_START_LOCK = threading.Lock()
 # JobBot 自己启动的 Camofox server 进程（用于退出时只停自己启动的）
 _CAMOFOX_PROC = None
+# 各平台已打开的登录页标签（供登录检测复用，避免新建重复页面）
+_LOGIN_TABS: dict[str, str] = {}
 
 _BOSS_LOGIN_STATE_JS = r"""
 (() => {
@@ -287,7 +289,7 @@ def snapshot(tab_id: str) -> dict:
 
 def close_tab(tab_id: str):
     try:
-        _request("DELETE", f"/tabs/{tab_id}")
+        _request("DELETE", f"/tabs/{tab_id}?userId={USER_ID}")
     except Exception:
         pass
 
@@ -317,9 +319,13 @@ def check_login(platform: str) -> dict:
     if not ensured["ok"]:
         return ensured
     base = pcfg.get("base_url", "")
-    tab = create_tab(base)
+    tab = _LOGIN_TABS.get(platform)
+    created = False
+    if not tab:
+        tab = create_tab(base)
+        created = True
     try:
-        time.sleep(5)
+        time.sleep(5 if created else 1.5)
         url = evaluate(tab, "location.href")
         url = url or ""
         if "login" in url.lower() or "passport" in url.lower():
@@ -348,7 +354,8 @@ def check_login(platform: str) -> dict:
             return {"ok": True, "url": url, "message": "未检测到登录拦截，按已登录处理"}
         return {"ok": True, "url": url, "message": "已登录"}
     finally:
-        close_tab(tab)
+        if created:
+            close_tab(tab)
 
 
 def open_login(platform: str) -> dict:
@@ -360,6 +367,11 @@ def open_login(platform: str) -> dict:
     ensured = ensure_camofox()
     if not ensured["ok"]:
         return ensured
+    # 若该平台已有登录页标签，先关掉再开新的，避免重复页面
+    old = _LOGIN_TABS.get(platform)
+    if old:
+        close_tab(old)
     tab = create_tab(pcfg.get("login_url", pcfg.get("base_url", "")))
+    _LOGIN_TABS[platform] = tab
     return {"ok": True, "tab": tab,
             "message": "已打开登录页，登录完成后将自动检测并提示"}
