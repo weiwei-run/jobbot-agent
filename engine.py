@@ -23,6 +23,9 @@ ROOT = Path(__file__).parent
 DATA_FILE = ROOT / "data" / "applications.json"
 PLATFORMS_FILE = ROOT / "config" / "platforms.yml"
 
+# 会话内登录状态缓存（平台 key → bool）。False/缺失 = 需要重新检测。
+_LOGIN_CACHE: dict[str, bool] = {}
+
 # 51job 城市代码
 CITY_CODES = {
     "南京": "070200", "北京": "010000", "上海": "020000", "广州": "030200",
@@ -114,6 +117,35 @@ def load_platforms() -> dict:
 def enabled_platforms() -> dict:
     return {k: v for k, v in load_platforms().items()
             if isinstance(v, dict) and v.get("enabled", False)}
+
+
+def get_login_states() -> dict:
+    return dict(_LOGIN_CACHE)
+
+
+def mark_login(platform_key: str, ok: bool):
+    """更新平台登录状态缓存。"""
+    _LOGIN_CACHE[platform_key] = bool(ok)
+
+
+def _precheck_logins(platforms: dict) -> dict:
+    """检查所有启用平台的登录状态（有缓存则跳过）。返回 {未登录key: 消息}。"""
+    import browser
+    missing: dict[str, str] = {}
+    for pkey in platforms:
+        if _LOGIN_CACHE.get(pkey):
+            continue
+        try:
+            res = browser.check_login(pkey)
+            ok = bool(res.get("ok"))
+            msg = res.get("message", "") if not ok else ""
+        except Exception as e:
+            ok = False
+            msg = str(e)[:120]
+        _LOGIN_CACHE[pkey] = ok
+        if not ok:
+            missing[pkey] = msg or "未登录"
+    return missing
 
 
 # ── 数据存储 ────────────────────────────────────────────
@@ -234,11 +266,18 @@ def _search_one_platform(platform_key: str, keyword: str, city: str, pcfg: dict,
 def run_search(intent: str, city: str = "南京", page_size: int = 20) -> dict:
     """一键流程：关键词 → 各启用平台搜索 → 去重 → LLM 评分。"""
     intent = re.sub(r"【简历解析】", "", intent or "").strip()
-    keywords = generate_keywords(intent)
     platforms = enabled_platforms()
     if not platforms:
         raise RuntimeError("未启用任何平台，请检查 config/platforms.yml")
 
+    # 登录门禁：开始搜索前先确认所有平台已登录；有未登录立即停止并提示
+    missing = _precheck_logins(platforms)
+    if missing:
+        warnings = [f"{platforms[k].get('name', k)}：{msg}" for k, msg in missing.items()]
+        return {"keywords": [], "jobs": [], "warnings": warnings,
+                "login_required": list(missing.keys()), "filtered": 0}
+
+    keywords = generate_keywords(intent)
     all_jobs: list[dict] = []
     seen: set = set()
     warnings: list[str] = []
@@ -264,6 +303,7 @@ def run_search(intent: str, city: str = "南京", page_size: int = 20) -> dict:
                     all_jobs.append(j)
                 count += len(jobs)
             except LoginRequired as e:
+                mark_login(pkey, False)
                 login_required.append(pkey)
                 warnings.append(f"{name}：{e}")
                 break
@@ -370,6 +410,13 @@ def apply_job(job: dict) -> dict:
     """自动投递：调用平台投递逻辑，成功后记录状态 applied。"""
     from platforms import apply
     result = apply(job)
+    platform_key = {"51job": "wuyou", "BOSS直聘": "boss_zhipin", "实习僧": "shixiseng"}.get(
+        job.get("platform", ""))
+    if result.get("ok"):
+        if platform_key:
+            mark_login(platform_key, True)
+    elif result.get("need_login") and platform_key:
+        mark_login(platform_key, False)
     if result.get("ok"):
         try:
             rec = add_application(job, status="applied")

@@ -61,7 +61,7 @@ boss_zhipin:
 # ===== 前程无忧（51job）=====
 wuyou:
   enabled: true
-  name: "前程无忧"
+  name: "51job"
   base_url: "https://we.51job.com"
   login_url: "https://login.51job.com/login.php?lang=c"
   search_url: "https://we.51job.com/pc/search?jobArea={city_code}&keyword={keyword}&searchType=2&sortType=0"

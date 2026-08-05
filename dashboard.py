@@ -231,7 +231,7 @@ let platformFilter='all',statusFilter='all';
 let sortKey='applied_at',sortDir='desc';
 let expanded=null;
 
-async function loadAll(){await Promise.all([loadData(),loadConfig(),loadLLM(),loadSettings()]);render();}
+async function loadAll(){await Promise.all([loadData(),loadConfig(),loadLLM(),loadSettings()]);render();checkEnv();}
 async function loadData(){const r=await fetch('/api/data');data=await r.json();}
 async function loadConfig(){
   try{const r=await fetch('/api/config');config=await r.json();}catch(e){}
@@ -300,7 +300,7 @@ function platformKey(name){
   return m[name]||name;
 }
 function platformName(key){
-  const m={'boss_zhipin':'BOSS直聘','wuyou':'前程无忧','shixiseng':'实习僧'};
+  const m={'boss_zhipin':'BOSS直聘','wuyou':'51job','shixiseng':'实习僧'};
   return m[key]||key;
 }
 function showLoginRequired(keys){
@@ -326,6 +326,7 @@ async function checkLogin(key){
   }else{
     toast('❌ '+platformName(key)+' 还未登录：'+d.message);
   }
+  checkEnv();
 }
 async function saveLLM(){
   const cfg={base_url:document.getElementById('llm-base').value.trim(),model:document.getElementById('llm-model').value.trim(),api_key:document.getElementById('llm-key').value.trim()};
@@ -396,8 +397,11 @@ function renderEnv(d){
   let html='';
   html+='<span class="env-chip"><span class="dot '+(d.camofox?'ok':'err')+'"></span>Camofox '+(d.camofox?'已运行':'未运行')+'</span>';
   (d.platforms||[]).forEach(p=>{
-    const dot=p.enabled?'ok':'';
-    html+=`<span class="env-chip"><span class="dot ${dot}"></span>${p.name} ${p.enabled?'已启用':'已禁用'}</span>`;
+    const st=(d.login_states||{})[p.key];
+    let cls='',label='未检测';
+    if(st===true){cls='ok';label='已登录';}
+    else if(st===false){cls='err';label='未登录';}
+    html+=`<span class="env-chip"><span class="dot ${cls}"></span>${esc(p.name)} ${label}</span>`;
   });
   box.innerHTML=html;
 }
@@ -412,7 +416,7 @@ async function runSearch(){
   const city=document.getElementById('cfg-city').value.trim()||'南京';
   if(!intent){toast('请先填写求职意向');return;}
   await autoSaveConfig();  // 搜索前自动保存，避免未点「保存意向」导致丢失
-  const st=document.getElementById('search-status');st.textContent='正在生成关键词+搜索+评分（约30~90秒）…';
+  const st=document.getElementById('search-status');st.textContent='正在检查登录状态并搜索评分（约30~90秒）…';
   document.getElementById('search-warnings').innerHTML='';
   const btn=document.querySelector('#search-section h3 button');
   btn.disabled=true;
@@ -422,7 +426,12 @@ async function runSearch(){
     if(!d.ok){toast('❌ '+d.error);st.textContent='';return;}
     document.getElementById('kw-box').innerHTML=(d.keywords||[]).map(k=>`<span class=kw>${esc(k)}</span>`).join('')||'';
     document.getElementById('search-warnings').innerHTML=(d.warnings||[]).map(w=>`<div class=warn-line>⚠ ${esc(w)}</div>`).join('');
-    if(d.login_required&&d.login_required.length)showLoginRequired(d.login_required);
+    if(d.login_required&&d.login_required.length){
+      showLoginRequired(d.login_required);
+    }else{
+      loginPending=[];renderLoginBox();
+    }
+    checkEnv();
     jobPage=1;
     renderJobs(d.jobs);
     st.textContent=`共找到 ${d.jobs.length} 个岗位${d.filtered?`（已过滤 ${d.filtered} 个低分岗位）`:''}，点击「投递」自动投递`;
@@ -801,7 +810,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "enabled": bool(pcfg.get("enabled")),
                 "requires_browser": bool(pcfg.get("requires_browser")),
             })
-        return {"camofox": browser.camofox_available(), "platforms": platforms}
+        return {"camofox": browser.camofox_available(), "platforms": platforms,
+                "login_states": engine.get_login_states()}
 
     def _handle_env_login(self):
         import browser
@@ -811,7 +821,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _handle_env_check(self):
         import browser
         body = self._body_json()
-        self._json(browser.check_login(body.get("platform", "")))
+        res = browser.check_login(body.get("platform", ""))
+        engine.mark_login(body.get("platform", ""), bool(res.get("ok")))
+        self._json(res)
 
     # ---- Upload & resume parse ----
     def _handle_upload(self):
