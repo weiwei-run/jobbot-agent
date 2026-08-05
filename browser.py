@@ -10,6 +10,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -18,6 +19,9 @@ from pathlib import Path
 CAMOFOX_PORT = 9377
 BASE = f"http://localhost:{CAMOFOX_PORT}"
 USER_ID = "jobbot"
+
+# 启动互斥：避免并发调用 ensure_camofox 拉起多个服务/浏览器进程
+_CAMOFOX_START_LOCK = threading.Lock()
 
 _BOSS_LOGIN_STATE_JS = r"""
 (() => {
@@ -139,44 +143,49 @@ def ensure_camofox() -> dict:
     if camofox_available():
         return {"ok": True, "message": "Camofox 已运行"}
 
-    server_js = _node_server_js()
-    if server_js is None:
-        return {"ok": False, "need_install": True,
-                "message": "未安装 Camofox。请先运行：npm install -g @askjo/camofox-browser（约150MB）"}
-    install_dir = _camoufox_install_dir()
-    if install_dir is None:
-        return {"ok": False, "need_install": True,
-                "message": "Camofox 浏览器引擎缺失，请运行 python scripts/setup.py 修复"}
-
-    env = dict(os.environ)
-    env["CAMOUFOX_INSTALL_DIR"] = install_dir
-    try:
-        if platform.system() == "Windows":
-            subprocess.run(["taskkill", "/F", "/IM", "camoufox.exe"],
-                           capture_output=True)
-        else:
-            subprocess.run(["pkill", "-f", "camoufox"], capture_output=True)
-    except Exception:
-        pass
-
-    try:
-        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-        subprocess.Popen(
-            ["node", str(server_js)],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
-        )
-    except Exception as e:
-        return {"ok": False, "message": f"Camofox 启动失败: {e}"}
-
-    # 等待就绪（最多 20 秒）
-    for _ in range(40):
-        time.sleep(0.5)
+    with _CAMOFOX_START_LOCK:
+        # 等待期间可能已被其他调用启动
         if camofox_available():
-            return {"ok": True, "message": "Camofox 已启动"}
-    return {"ok": False, "message": "Camofox 启动超时，请手动启动 server.js 后重试"}
+            return {"ok": True, "message": "Camofox 已运行"}
+
+        server_js = _node_server_js()
+        if server_js is None:
+            return {"ok": False, "need_install": True,
+                    "message": "未安装 Camofox。请先运行：npm install -g @askjo/camofox-browser（约150MB）"}
+        install_dir = _camoufox_install_dir()
+        if install_dir is None:
+            return {"ok": False, "need_install": True,
+                    "message": "Camofox 浏览器引擎缺失，请运行 python scripts/setup.py 修复"}
+
+        env = dict(os.environ)
+        env["CAMOUFOX_INSTALL_DIR"] = install_dir
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(["taskkill", "/F", "/IM", "camoufox.exe"],
+                               capture_output=True)
+            else:
+                subprocess.run(["pkill", "-f", "camoufox"], capture_output=True)
+        except Exception:
+            pass
+
+        try:
+            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            subprocess.Popen(
+                ["node", str(server_js)],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+        except Exception as e:
+            return {"ok": False, "message": f"Camofox 启动失败: {e}"}
+
+        # 等待就绪（最多 20 秒）
+        for _ in range(40):
+            time.sleep(0.5)
+            if camofox_available():
+                return {"ok": True, "message": "Camofox 已启动"}
+        return {"ok": False, "message": "Camofox 启动超时，请手动启动 server.js 后重试"}
 
 
 def create_tab(url: str, session_key: str = "default") -> str:

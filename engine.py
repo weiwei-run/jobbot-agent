@@ -131,26 +131,6 @@ def mark_login(platform_key: str, ok: bool):
     _LOGIN_CACHE[platform_key] = bool(ok)
 
 
-def _precheck_logins(platforms: dict) -> dict:
-    """检查所有启用平台的登录状态（有缓存则跳过）。返回 {未登录key: 消息}。"""
-    import browser
-    missing: dict[str, str] = {}
-    for pkey in platforms:
-        if _LOGIN_CACHE.get(pkey):
-            continue
-        try:
-            res = browser.check_login(pkey)
-            ok = bool(res.get("ok"))
-            msg = res.get("message", "") if not ok else ""
-        except Exception as e:
-            ok = False
-            msg = str(e)[:120]
-        _LOGIN_CACHE[pkey] = ok
-        if not ok:
-            missing[pkey] = msg or "未登录"
-    return missing
-
-
 def _p(progress: dict | None, step: str, detail: str = ""):
     if progress is not None:
         progress["step"] = step
@@ -339,22 +319,32 @@ def run_search(intent: str, city: str = "南京", page_size: int = 20,
     if not platforms:
         raise RuntimeError("未启用任何平台，请检查 config/platforms.yml")
 
-    # 登录门禁：开始搜索前先确认所有平台已登录；有未登录立即停止并提示
-    _p(progress, "检查登录状态", "正在确认三大平台已登录")
-    missing = _precheck_logins(platforms)
-    if missing:
-        warnings = [f"{platforms[k].get('name', k)}：{msg}" for k, msg in missing.items()]
+    # 登录门禁：按 Dashboard 登录状态决定搜索范围——有几个平台登录就搜几个；
+    # 一个都没登录则不拉起浏览器，直接提示用户先点上方登录按钮。
+    _p(progress, "检查登录状态", "按已登录平台开始搜索")
+    login_states = get_login_states()
+    logged_in_keys = [k for k in platforms if login_states.get(k)]
+    if not logged_in_keys:
+        warnings = ["还没有平台登录。请先点击上方的【BOSS登录】【51job登录】【实习僧登录】"
+                    "完成至少一个平台登录，再点击【开始搜索】。"]
         return {"keywords": [], "jobs": [], "warnings": warnings,
-                "login_required": list(missing.keys()), "filtered": 0, "offline": 0}
+                "login_required": list(platforms.keys()),
+                "filtered": 0, "offline": 0}
+    active_platforms = {k: v for k, v in platforms.items() if login_states.get(k)}
+    skipped = [k for k in platforms if not login_states.get(k)]
+    warnings: list[str] = []
+    login_required: list[str] = []
+    if skipped:
+        names = "、".join(platforms[k].get("name", k) for k in skipped)
+        warnings.append(f"以下平台未登录，本次跳过（可先点上方登录按钮登录）：{names}")
+        login_required = list(skipped)
 
     _p(progress, "生成搜索关键词")
     keywords = generate_keywords(intent)
     profile = _user_profile(intent)
     all_jobs: list[dict] = []
     seen: set = set()
-    warnings: list[str] = []
-    login_required: list[str] = []
-    for pkey, pcfg in platforms.items():
+    for pkey, pcfg in active_platforms.items():
         name = pcfg.get("name", pkey)
         count = 0
         fails = 0
