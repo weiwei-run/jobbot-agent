@@ -102,7 +102,7 @@ shixiseng:
   enabled: true
   name: "实习僧"
   base_url: "https://www.shixiseng.com"
-  login_url: "https://passport.shixiseng.com/login"
+  login_url: "https://www.shixiseng.com/"
   search_url: "https://www.shixiseng.com/interns?keyword={keyword}&city={city}&type=intern"
 
   search_keywords: []

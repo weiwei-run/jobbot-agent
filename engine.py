@@ -35,6 +35,9 @@ CITY_CODES = {
     "宁波": "081000", "青岛": "120200", "厦门": "100300", "佛山": "030800",
 }
 
+# 学历硬指标等级（数值越大要求越高）
+DEGREE_RANK = {"高中": 0, "中专": 0, "大专": 1, "本科": 2, "硕士": 3, "博士": 4}
+
 
 # ── 轻量 YAML 解析（只支持本项目 platforms.yml 用到的子集）──
 
@@ -146,6 +149,71 @@ def _precheck_logins(platforms: dict) -> dict:
         if not ok:
             missing[pkey] = msg or "未登录"
     return missing
+
+
+def _p(progress: dict | None, step: str, detail: str = ""):
+    if progress is not None:
+        progress["step"] = step
+        progress["detail"] = detail
+
+
+def _user_profile(intent: str) -> dict:
+    """从意向描述提取用户硬指标（学历/工作年限）。"""
+    p: dict = {}
+    m = re.search(r"学历[:：]\s*(大专|本科|硕士|博士|中专|高中|研究生)", intent)
+    if m:
+        p["education"] = "硕士" if m.group(1) == "研究生" else m.group(1)
+    m = re.search(r"(\d+)\s*年(?:以上)?(?:工作|实操|相关)?经验", intent)
+    if m:
+        p["work_years"] = int(m.group(1))
+    if re.search(r"应届|在校生|无经验", intent):
+        p.setdefault("work_years", 0)
+    return p
+
+
+def _jd_required_degree(jd: str) -> int:
+    """JD 要求的最低学历等级，0 = 不限/无明确要求。"""
+    if re.search(r"学历\s*(不限|无要求)", jd):
+        return 0
+    m = re.search(r"(?:学历|要求)[:：]?\s*(博士|硕士|本科|大专|中专|高中)", jd)
+    if m:
+        return DEGREE_RANK[m.group(1)]
+    m = re.search(r"(统招|全日制)?\s*(博士|硕士|本科|大专|中专|高中)[及以]?上?", jd)
+    if m:
+        return DEGREE_RANK[m.group(2)]
+    return 0
+
+
+def _jd_required_years(jd: str) -> int:
+    """JD 要求的最低工作年限，0 = 不限。"""
+    if re.search(r"经验\s*(不限|无要求)", jd):
+        return 0
+    m = re.search(r"(\d+)\s*年(?:及|以)?上", jd)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"工作\s*(\d+)\s*年", jd)
+    if m:
+        return int(m.group(1))
+    return 0
+
+
+def _hard_filter(job: dict, profile: dict, city: str) -> bool:
+    """硬指标过滤：学历/年限/地域不满足直接剔除（不看 LLM 评分）。"""
+    jd = job.get("jd_summary") or ""
+    edu = profile.get("education")
+    if edu and edu in DEGREE_RANK:
+        if _jd_required_degree(jd) > DEGREE_RANK[edu]:
+            return False
+    if "work_years" in profile:
+        need = _jd_required_years(jd)
+        if need and profile["work_years"] < need:
+            return False
+    loc = job.get("location") or ""
+    if loc and city and city not in loc:
+        for c in CITY_CODES:
+            if c in loc:
+                return False
+    return True
 
 
 # ── 数据存储 ────────────────────────────────────────────
@@ -263,7 +331,8 @@ def _search_one_platform(platform_key: str, keyword: str, city: str, pcfg: dict,
     return jobs
 
 
-def run_search(intent: str, city: str = "南京", page_size: int = 20) -> dict:
+def run_search(intent: str, city: str = "南京", page_size: int = 20,
+               progress: dict | None = None) -> dict:
     """一键流程：关键词 → 各启用平台搜索 → 去重 → LLM 评分。"""
     intent = re.sub(r"【简历解析】", "", intent or "").strip()
     platforms = enabled_platforms()
@@ -271,13 +340,16 @@ def run_search(intent: str, city: str = "南京", page_size: int = 20) -> dict:
         raise RuntimeError("未启用任何平台，请检查 config/platforms.yml")
 
     # 登录门禁：开始搜索前先确认所有平台已登录；有未登录立即停止并提示
+    _p(progress, "检查登录状态", "正在确认三大平台已登录")
     missing = _precheck_logins(platforms)
     if missing:
         warnings = [f"{platforms[k].get('name', k)}：{msg}" for k, msg in missing.items()]
         return {"keywords": [], "jobs": [], "warnings": warnings,
-                "login_required": list(missing.keys()), "filtered": 0}
+                "login_required": list(missing.keys()), "filtered": 0, "offline": 0}
 
+    _p(progress, "生成搜索关键词")
     keywords = generate_keywords(intent)
+    profile = _user_profile(intent)
     all_jobs: list[dict] = []
     seen: set = set()
     warnings: list[str] = []
@@ -286,10 +358,11 @@ def run_search(intent: str, city: str = "南京", page_size: int = 20) -> dict:
         name = pcfg.get("name", pkey)
         count = 0
         fails = 0
-        for kw in keywords:
+        for idx, kw in enumerate(keywords):
             if fails >= 2:
                 warnings.append(f"{name}：连续失败，跳过剩余关键词（疑似被风控/未登录）")
                 break
+            _p(progress, f"搜索 {name}", f"关键词 {idx + 1}/{len(keywords)}")
             try:
                 jobs = _search_one_platform(pkey, kw, city, pcfg, page_size)
                 fails = 0
@@ -317,17 +390,44 @@ def run_search(intent: str, city: str = "南京", page_size: int = 20) -> dict:
         elif pkey not in login_required:
             warnings.append(f"{name}：未找到岗位（可能需要登录/更换关键词）")
 
+    # 硬指标过滤（评分前剔除，节省 LLM 调用）
+    _p(progress, "硬指标过滤", "学历/年限/地域不满足的岗位直接剔除")
+    before = len(all_jobs)
+    all_jobs = [j for j in all_jobs if _hard_filter(j, profile, city)]
+    hard_removed = before - len(all_jobs)
+
     # 候选过多时先限量（避免一次性 LLM 评分爆量）
     if len(all_jobs) > 100:
         all_jobs = all_jobs[:100]
+    _p(progress, "AI 评分", f"共 {len(all_jobs)} 个候选岗位")
     total_candidates = len(all_jobs)
     all_jobs = score_jobs(all_jobs, intent)
     all_jobs.sort(key=lambda j: j.get("score", 0), reverse=True)
     filtered = sum(1 for j in all_jobs if j.get("score", 0) < 3)
+    filtered += hard_removed
     all_jobs = [j for j in all_jobs if j.get("score", 0) >= 3]
+
+    # 已下线/审核中岗位过滤（只校验评分达标的岗位，节省请求）
+    offline = 0
+    if all_jobs:
+        _p(progress, "校验岗位有效性", "正在过滤已下线/审核中的岗位")
+        from concurrent.futures import ThreadPoolExecutor
+        from platforms import job_offline
+
+        def _keep(j: dict):
+            if j.get("platform") == "51job" and j.get("url") and job_offline(j["url"]):
+                return None
+            return j
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            kept = list(ex.map(_keep, all_jobs))
+        offline = sum(1 for j in all_jobs if j not in kept)
+        all_jobs = [j for j in kept if j]
+
+    _p(progress, "完成", f"共找到 {len(all_jobs)} 个匹配岗位")
     return {"keywords": keywords, "jobs": all_jobs, "warnings": warnings,
             "login_required": login_required,
-            "filtered": filtered}
+            "filtered": filtered, "offline": offline}
 
 
 def score_jobs(jobs: list[dict], intent: str) -> list[dict]:
@@ -343,6 +443,8 @@ def score_jobs(jobs: list[dict], intent: str) -> list[dict]:
     prompt = (
         "你是求职匹配评分专家。根据求职者意向，对每个岗位评 1~5 星：\n"
         "5星=专业高度匹配+学历符合+城市符合；4星=相关可投；3星=沾边可试；2星=勉强；1星=不投\n"
+        "硬性要求必须一票否决：学历不达标、经验年限不够、工作地点不在目标城市、必需技能缺失 → 一律打 1 星，"
+        "即使其他方面再好也不行，并在 reason 里说明是哪个硬指标不满足。\n"
         "只返回 JSON：{\"scores\": [{\"i\": 0, \"score\": 4, \"reason\": \"一句话理由\"}, ...]}\n"
         f"求职意向：{intent}\n岗位列表：{json.dumps(brief, ensure_ascii=False)}"
     )

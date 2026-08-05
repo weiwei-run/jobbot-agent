@@ -33,8 +33,8 @@ os.makedirs(RESUME_DIR, exist_ok=True)
 if not DATA_FILE.exists():
     engine.save_db(engine._empty_db())
 
-# 全局互斥：避免并发搜索 / 并发投递打爆 Camofox
-SEARCH_LOCK = threading.Lock()
+# 后台搜索任务（避免搜索期间 Dashboard 无响应，并支持进度反馈）
+SEARCH_TASK: dict = {"running": False, "progress": {}, "result": None, "error": None}
 APPLY_LOCK = threading.Lock()
 
 
@@ -448,28 +448,49 @@ async function runSearch(){
   const city=document.getElementById('cfg-city').value.trim()||'南京';
   if(!intent){toast('请先填写求职意向');return;}
   await autoSaveConfig();  // 搜索前自动保存，避免未点「保存意向」导致丢失
-  const st=document.getElementById('search-status');st.textContent='正在检查登录状态并搜索评分（约30~90秒）…';
+  const st=document.getElementById('search-status');
   document.getElementById('search-warnings').innerHTML='';
   const btn=document.querySelector('#search-section h3 button');
   btn.disabled=true;
+  st.textContent='⏳ 正在启动搜索…';
+  const t0=Date.now();
   try{
     const r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({intent,city})});
     const d=await r.json();
-    if(!d.ok){toast('❌ '+d.error);st.textContent='';return;}
-    document.getElementById('kw-box').innerHTML=(d.keywords||[]).map(k=>`<span class=kw>${esc(k)}</span>`).join('')||'';
-    document.getElementById('search-warnings').innerHTML=(d.warnings||[]).map(w=>`<div class=warn-line>⚠ ${esc(w)}</div>`).join('');
-    if(d.login_required&&d.login_required.length){
-      showLoginRequired(d.login_required);
-    }else{
-      loginPending=[];renderLoginBox();
-    }
-    checkEnv();
-    jobPage=1;
-    renderJobs(d.jobs);
-    st.textContent=`共找到 ${d.jobs.length} 个岗位${d.filtered?`（已过滤 ${d.filtered} 个低分岗位）`:''}，点击「投递」自动投递`;
-    showApp();
-  }catch(e){toast('❌ 搜索失败');}
-  btn.disabled=false;
+    if(!d.ok){toast('❌ '+d.error);st.textContent='';btn.disabled=false;return;}
+    // 轮询进度：实时显示正在做什么
+    const timer=setInterval(async ()=>{
+      try{
+        const sr=await fetch('/api/search/status');
+        const s=await sr.json();
+        const secs=Math.round((Date.now()-t0)/1000);
+        st.textContent='⏳ '+esc(s.step||'搜索中')+'…（'+secs+'s）'+(s.detail?' · '+esc(s.detail):'');
+        if(s.running)return;
+        clearInterval(timer);
+        btn.disabled=false;
+        if(s.error){st.textContent='❌ '+s.error;toast('❌ '+s.error);return;}
+        renderSearchResult(s.result||{});
+        const jobs=s.result&&s.result.jobs||[];
+        const extra=[];
+        if(s.result&&s.result.filtered)extra.push('已过滤 '+s.result.filtered+' 个不匹配岗位');
+        if(s.result&&s.result.offline)extra.push('已过滤 '+s.result.offline+' 个已下线岗位');
+        st.textContent=`共找到 ${jobs.length} 个岗位${extra.length?'（'+extra.join('、')+'）':''}，点击「投递」自动投递`;
+      }catch(e){clearInterval(timer);btn.disabled=false;toast('❌ 搜索状态获取失败');}
+    },1000);
+  }catch(e){btn.disabled=false;toast('❌ 搜索启动失败');}
+}
+function renderSearchResult(d){
+  document.getElementById('kw-box').innerHTML=(d.keywords||[]).map(k=>`<span class=kw>${esc(k)}</span>`).join('')||'';
+  document.getElementById('search-warnings').innerHTML=(d.warnings||[]).map(w=>`<div class=warn-line>⚠ ${esc(w)}</div>`).join('');
+  if(d.login_required&&d.login_required.length){
+    showLoginRequired(d.login_required);
+  }else{
+    loginPending=[];renderLoginBox();
+  }
+  checkEnv();
+  jobPage=1;
+  renderJobs(d.jobs||[]);
+  showApp();
 }
 function renderJobs(jobs){
   window._lastJobs=jobs||[];
@@ -699,6 +720,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"spreadsheet": spreadsheet._public(spreadsheet.load_settings())})
         elif self.path == '/api/env':
             self._json(self._env_status())
+        elif self.path == '/api/search/status':
+            self._json(self._search_status())
         else:
             self.send_error(404)
 
@@ -763,17 +786,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ---- Search ----
     def _handle_search(self):
-        if not SEARCH_LOCK.acquire(blocking=False):
+        if SEARCH_TASK.get("running"):
             self._json({"ok": False, "error": "已有搜索正在进行，请稍候"})
             return
-        try:
-            body = self._body_json()
-            result = engine.run_search(body.get("intent", ""), body.get("city", "南京"))
-            self._json({"ok": True, **result})
-        except Exception as e:
-            self._json({"ok": False, "error": str(e)[:300]})
-        finally:
-            SEARCH_LOCK.release()
+        body = self._body_json()
+        intent = body.get("intent", "")
+        if not intent or len(intent.strip()) < 4:
+            self._json({"ok": False, "error": "请先填写求职意向（城市、岗位、技能等）"})
+            return
+        progress = {"step": "准备中", "detail": ""}
+        SEARCH_TASK.update({"running": True, "progress": progress,
+                            "result": None, "error": None})
+
+        def _run():
+            try:
+                result = engine.run_search(intent, body.get("city", "南京"),
+                                           progress=progress)
+                SEARCH_TASK["result"] = result
+            except Exception as e:
+                SEARCH_TASK["error"] = str(e)[:300]
+            finally:
+                SEARCH_TASK["running"] = False
+
+        threading.Thread(target=_run, daemon=True).start()
+        self._json({"ok": True, "started": True})
+
+    def _handle_search_status(self):
+        self._json(self._search_status())
+
+    def _search_status(self):
+        return {
+            "running": SEARCH_TASK.get("running", False),
+            "step": SEARCH_TASK.get("progress", {}).get("step", ""),
+            "detail": SEARCH_TASK.get("progress", {}).get("detail", ""),
+            "result": SEARCH_TASK.get("result"),
+            "error": SEARCH_TASK.get("error"),
+        }
 
     # ---- Apply ----
     def _handle_apply(self):

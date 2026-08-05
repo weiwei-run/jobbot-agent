@@ -23,6 +23,24 @@ class LoginRequired(RuntimeError):
 WUYOU_MAX_PAGES = 3
 SCROLL_ROUNDS = 5
 
+# 岗位已下线/失效特征词
+OFFLINE_MARKERS = [
+    "审核中", "已下线", "职位已关闭", "招聘已结束", "已暂停招聘",
+    "职位不存在", "该职位已下线", "该职位已暂停", "职位已失效", "岗位已下线",
+]
+
+
+def job_offline(url: str) -> bool:
+    """HTTP 请求岗位详情页，检测是否已下线/审核中。网络异常不误杀（返回 False）。"""
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            html = r.read(300000).decode("utf-8", errors="ignore")
+        return any(m in html for m in OFFLINE_MARKERS)
+    except Exception:
+        return False
+
 
 # ── 通用解析工具 ──────────────────────────────────────────
 
@@ -463,6 +481,9 @@ def apply_boss(job: dict) -> dict:
             browser.navigate(tab, _platform_login_url("boss_zhipin"))
             return {"ok": False, "need_login": True,
                     "message": "BOSS直聘未登录：浏览器已停在登录页，请手动登录后回来重新点「投递」"}
+        body_text = browser.evaluate(tab, "document.body.innerText")
+        if any(m in (body_text or "") for m in OFFLINE_MARKERS):
+            return {"ok": False, "message": "该岗位已下线或审核中，请换一个岗位投递", "offline": True}
         # 点「立即沟通」
         sel = "'.btn-startchat-wrap, [class*=btn-startchat], [class*=chat-btn], [class*=沟通]'"
         browser.evaluate(tab, _click_js(sel))
@@ -505,6 +526,9 @@ def apply_wuyou(job: dict) -> dict:
             browser.navigate(tab, _platform_login_url("wuyou"))
             return {"ok": False, "need_login": True,
                     "message": "51job 未登录：浏览器已停在登录页，请手动登录后回来重新点「投递」"}
+        body_text = browser.evaluate(tab, "document.body.innerText")
+        if any(m in (body_text or "") for m in OFFLINE_MARKERS):
+            return {"ok": False, "message": "该岗位已下线或审核中，请换一个岗位投递", "offline": True}
         # 部分岗位是「去聊聊」而非「投递」
         btn_state = browser.evaluate(tab, _find_visible_button_js(["投递", "立即投递", "投递简历"]))
         if "notfound" in str(btn_state):
@@ -550,6 +574,9 @@ def apply_shixiseng(job: dict) -> dict:
             browser.navigate(tab, _platform_login_url("shixiseng"))
             return {"ok": False, "need_login": True,
                     "message": "实习僧未登录：浏览器已停在登录页，请手动登录后回来重新点「投递」"}
+        body_text = browser.evaluate(tab, "document.body.innerText")
+        if any(m in (body_text or "") for m in OFFLINE_MARKERS):
+            return {"ok": False, "message": "该岗位已下线或审核中，请换一个岗位投递", "offline": True}
         r1 = browser.evaluate(tab, _find_visible_button_js(["投个简历", "投递", "立即投递"]))
         if "notfound" in str(r1):
             return {"ok": False, "message": "未找到「投个简历」按钮，请人工确认"}
