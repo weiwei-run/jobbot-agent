@@ -1122,4 +1122,13 @@ if __name__ == '__main__':
             sys.exit(1)
     print(f'JobBot Dashboard → http://localhost:{PORT}')
     print('使用流程：配置 LLM Key → 上传简历/填意向 → 开始搜索 → 点「投递」')
-    http.server.ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
+    try:
+        http.server.ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            import browser
+            browser.stop_camofox()
+        except Exception:
+            pass

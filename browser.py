@@ -22,6 +22,8 @@ USER_ID = "jobbot"
 
 # 启动互斥：避免并发调用 ensure_camofox 拉起多个服务/浏览器进程
 _CAMOFOX_START_LOCK = threading.Lock()
+# JobBot 自己启动的 Camofox server 进程（用于退出时只停自己启动的）
+_CAMOFOX_PROC = None
 
 _BOSS_LOGIN_STATE_JS = r"""
 (() => {
@@ -138,8 +140,46 @@ def _camoufox_install_dir() -> str | None:
     return None
 
 
+def _port_pid(port: int) -> int | None:
+    """查找监听指定端口的进程 PID（跨平台尽力而为）。"""
+    try:
+        if platform.system() == "Windows":
+            out = subprocess.run(["netstat", "-ano"], capture_output=True,
+                                 text=True).stdout
+            for line in out.splitlines():
+                parts = line.split()
+                if (len(parts) >= 5 and parts[0] == "TCP"
+                        and parts[1].endswith(f":{port}")
+                        and "LISTENING" in line.upper()):
+                    return int(parts[-1])
+        else:
+            out = subprocess.run(["lsof", "-ti", f"tcp:{port}"],
+                                 capture_output=True, text=True).stdout.strip()
+            if out:
+                return int(out.splitlines()[0])
+    except Exception:
+        return None
+    return None
+
+
+def _kill_port_owner(port: int):
+    """强制结束占用端口的进程（仅用于启动前清理残留服务）。"""
+    pid = _port_pid(port)
+    if not pid:
+        return
+    try:
+        if platform.system() == "Windows":
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                           capture_output=True)
+        else:
+            os.kill(pid, 9)
+    except Exception:
+        pass
+
+
 def ensure_camofox() -> dict:
     """确保 Camofox 服务在运行；未安装则给出安装指引。"""
+    global _CAMOFOX_PROC
     if camofox_available():
         return {"ok": True, "message": "Camofox 已运行"}
 
@@ -159,6 +199,8 @@ def ensure_camofox() -> dict:
 
         env = dict(os.environ)
         env["CAMOUFOX_INSTALL_DIR"] = install_dir
+        # 清理残留服务（占着端口但不可用的 node 进程）与残留浏览器进程
+        _kill_port_owner(CAMOFOX_PORT)
         try:
             if platform.system() == "Windows":
                 subprocess.run(["taskkill", "/F", "/IM", "camoufox.exe"],
@@ -170,13 +212,14 @@ def ensure_camofox() -> dict:
 
         try:
             creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 ["node", str(server_js)],
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=creationflags,
             )
+            _CAMOFOX_PROC = proc
         except Exception as e:
             return {"ok": False, "message": f"Camofox 启动失败: {e}"}
 
@@ -186,6 +229,39 @@ def ensure_camofox() -> dict:
             if camofox_available():
                 return {"ok": True, "message": "Camofox 已启动"}
         return {"ok": False, "message": "Camofox 启动超时，请手动启动 server.js 后重试"}
+
+
+def stop_camofox() -> dict:
+    """停掉 JobBot 自己启动的 Camofox 服务；外部运行的实例不动。"""
+    global _CAMOFOX_PROC
+    proc = _CAMOFOX_PROC
+    if proc is None:
+        return {"ok": True, "message": "Camofox 非 JobBot 启动，无需停止"}
+    _CAMOFOX_PROC = None
+    # 优先优雅停止（未配置 admin key 时可能 403，忽略）
+    try:
+        _request("POST", "/stop", {}, timeout=5)
+        time.sleep(1)
+    except Exception:
+        pass
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    # 清理残留浏览器进程
+    try:
+        if platform.system() == "Windows":
+            subprocess.run(["taskkill", "/F", "/IM", "camoufox.exe"],
+                           capture_output=True)
+        else:
+            subprocess.run(["pkill", "-f", "camoufox"], capture_output=True)
+    except Exception:
+        pass
+    return {"ok": True, "message": "已停止 JobBot 启动的 Camofox"}
 
 
 def create_tab(url: str, session_key: str = "default") -> str:
