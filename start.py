@@ -66,15 +66,15 @@ def main():
     try:
         while True:
             time.sleep(1)
-except KeyboardInterrupt:
-    if dash:
-        dash.terminate()
-    try:
-        import browser
-        browser.stop_camofox()
-    except Exception:
-        pass
-    print("\n👋 JobBot 已停止")
+    except KeyboardInterrupt:
+        if dash:
+            dash.terminate()
+        try:
+            import browser
+            browser.stop_camofox()
+        except Exception:
+            pass
+        print("\n👋 JobBot 已停止")
 
 
 if __name__ == "__main__":
