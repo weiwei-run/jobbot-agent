@@ -50,6 +50,24 @@ _SXS_LOGIN_STATE_JS = r"""
 })()
 """
 
+_WUYOU_LOGIN_STATE_JS = r"""
+(() => {
+  const text = document.body.innerText;
+  const url = location.href;
+  if (url.includes('/login') || url.includes('passport') || url.includes('sso.')) return 'logged_out';
+  // 登录态标志：可见的用户名/头像、「编辑简历」「在线简历」等
+  const userInfo = Array.from(document.querySelectorAll(
+      '.user-info, [class*=user-info], [class*=UserInfo], .username, [class*=member_userinfo]'))
+    .find(e => e.offsetParent !== null && e.offsetWidth > 0 && (e.innerText || '').trim().length > 0);
+  if (userInfo || text.includes('编辑简历') || text.includes('在线简历')) return 'logged_in';
+  // 未登录：登录页/验证码/登录框
+  const wall = text.includes('验证码登录')
+    || !!document.querySelector('.login-box, [class*=login-form], [class*=loginForm], [class*=QRcode], [class*=qr-code]');
+  if (wall) return 'logged_out';
+  return 'unknown';
+})()
+"""
+
 
 def js_bool(v) -> bool:
     """Camofox evaluate 返回的 JS 布尔是字符串 'true'/'false'，统一转成 Python bool。"""
@@ -230,10 +248,12 @@ def check_login(platform: str) -> dict:
             # unknown：无登录墙也无登录按钮，按已登录继续（后续搜索/投递会再次校验）
             return {"ok": True, "url": url, "message": "未检测到登录拦截，按已登录处理"}
         if platform == "wuyou":
-            logged_in_mark = evaluate(tab,
-                "document.body.innerText.includes('退出') || document.body.innerText.includes('我的简历')")
-            if not js_bool(logged_in_mark):
-                return {"ok": False, "url": url, "message": "未检测到登录状态（未看到「退出/我的简历」）"}
+            state = (evaluate(tab, _WUYOU_LOGIN_STATE_JS) or "").strip()
+            if state == "logged_out":
+                return {"ok": False, "url": url, "message": "未登录，请打开登录页完成登录"}
+            if state == "logged_in":
+                return {"ok": True, "url": url, "message": "已登录"}
+            return {"ok": True, "url": url, "message": "未检测到登录拦截，按已登录处理"}
         if platform == "shixiseng":
             state = (evaluate(tab, _SXS_LOGIN_STATE_JS) or "").strip()
             if state == "logged_out":
@@ -257,4 +277,4 @@ def open_login(platform: str) -> dict:
         return ensured
     tab = create_tab(pcfg.get("login_url", pcfg.get("base_url", "")))
     return {"ok": True, "tab": tab,
-            "message": "已打开登录页，请手动完成登录后回来点「已登录，继续」"}
+            "message": "已打开登录页，登录完成后将自动检测并提示"}

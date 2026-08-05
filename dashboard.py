@@ -226,6 +226,7 @@ let loginPending=[];
 let saveTimer=null;
 let _resumeParse='';
 let jobPage=1;
+const loginPollers={};
 const JOBS_PER_PAGE=5;
 let platformFilter='all',statusFilter='all';
 let sortKey='applied_at',sortDir='desc';
@@ -317,6 +318,7 @@ function renderLoginBox(){
     <button class="btn-sm btn-good" onclick="checkLogin('${k}')">已登录，继续</button></span>`).join('');
 }
 async function checkLogin(key){
+  stopLoginPoll(key);
   const r=await fetch('/api/env/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:key})});
   const d=await r.json();
   if(d.ok){
@@ -408,8 +410,38 @@ function renderEnv(d){
 async function openLogin(platform){
   const r=await fetch('/api/env/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform})});
   const d=await r.json();
-  if(d.ok){toast('✅ '+d.message);checkEnv();}
-  else toast('❌ '+d.message);
+  if(d.ok){
+    toast('✅ '+d.message);
+    startLoginPoll(platform);
+  }else{
+    toast('❌ '+d.message);
+  }
+}
+function stopLoginPoll(key){
+  if(loginPollers[key]){clearTimeout(loginPollers[key]);delete loginPollers[key];}
+}
+function startLoginPoll(key){
+  stopLoginPoll(key);
+  let tries=0;
+  (function tick(){
+    tries++;
+    fetch('/api/env/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:key})})
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.ok){
+          stopLoginPoll(key);
+          toast('✅ '+platformName(key)+' 已登录成功，可直接开始搜索');
+          loginPending=loginPending.filter(x=>x!==key);
+          renderLoginBox();
+          checkEnv();
+        }else if(tries<90){
+          loginPollers[key]=setTimeout(tick,3000);
+        }else{
+          toast('⏳ '+platformName(key)+' 登录等待超时，登录完成后可点「已登录，继续」确认');
+        }
+      })
+      .catch(()=>{if(tries<90)loginPollers[key]=setTimeout(tick,3000);});
+  })();
 }
 async function runSearch(){
   const intent=document.getElementById('cfg-intent').value.trim();
