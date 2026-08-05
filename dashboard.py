@@ -169,6 +169,7 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
   <div id=search-warnings></div>
   <div id=kw-box class=row style="margin-top:0"></div>
   <div id=job-list></div>
+  <div id=pager style="display:none;text-align:center;margin:14px 0"></div>
 </section>
 
 <section id=stats-section class=hidden><h3>📊 投递总览</h3>
@@ -224,6 +225,8 @@ let settings={};
 let loginPending=[];
 let saveTimer=null;
 let _resumeParse='';
+let jobPage=1;
+const JOBS_PER_PAGE=5;
 let platformFilter='all',statusFilter='all';
 let sortKey='applied_at',sortDir='desc';
 let expanded=null;
@@ -420,16 +423,29 @@ async function runSearch(){
     document.getElementById('kw-box').innerHTML=(d.keywords||[]).map(k=>`<span class=kw>${esc(k)}</span>`).join('')||'';
     document.getElementById('search-warnings').innerHTML=(d.warnings||[]).map(w=>`<div class=warn-line>⚠ ${esc(w)}</div>`).join('');
     if(d.login_required&&d.login_required.length)showLoginRequired(d.login_required);
+    jobPage=1;
     renderJobs(d.jobs);
-    st.textContent=`共找到 ${d.jobs.length} 个岗位，点击「投递」自动投递`;
+    st.textContent=`共找到 ${d.jobs.length} 个岗位${d.filtered?`（已过滤 ${d.filtered} 个低分岗位）`:''}，点击「投递」自动投递`;
     showApp();
   }catch(e){toast('❌ 搜索失败');}
   btn.disabled=false;
 }
 function renderJobs(jobs){
+  window._lastJobs=jobs||[];
   const el=document.getElementById('job-list');
-  if(!jobs.length){el.innerHTML='<p style="color:#8b949e">没有找到匹配岗位</p>';return;}
-  el.innerHTML=jobs.map((j,i)=>`
+  if(!jobs.length){
+    el.innerHTML='<p style="color:#8b949e;line-height:2">😕 没有找到 3 星及以上的匹配岗位。<br>'+
+      '建议：完善「意向描述」（目标城市、岗位方向、技能、薪资期望），或调整关键词/平台过滤规则，然后重新搜索。</p>';
+    document.getElementById('pager').style.display='none';
+    return;
+  }
+  const totalPages=Math.ceil(jobs.length/JOBS_PER_PAGE);
+  if(jobPage>totalPages)jobPage=totalPages;
+  const start=(jobPage-1)*JOBS_PER_PAGE;
+  const pageJobs=jobs.slice(start,start+JOBS_PER_PAGE);
+  el.innerHTML=pageJobs.map((j,idx)=>{
+    const i=start+idx;  // 全局下标，投递/记录用
+    return `
   <div class=job-card id="jc-${i}">
     <div class=top>
       <div><span class=pos>${esc(j.position)}</span> ${j.risk==='suspicious'?'<span class=risk-tag>⚠ 可疑</span>':''}<br>
@@ -446,8 +462,24 @@ function renderJobs(jobs){
       ${j.risk==='suspicious'?`<span style="font-size:12px;color:var(--err)">可疑词: ${esc((j.risk_hits||[]).join('、'))}</span>`:''}
     </div>
     <div id="apply-result-${i}"></div>
-  </div>`).join('');
-  window._lastJobs=jobs;
+  </div>`;
+  }).join('');
+  renderPager(jobs.length);
+}
+function renderPager(total){
+  const p=document.getElementById('pager');
+  const pages=Math.max(1,Math.ceil(total/JOBS_PER_PAGE));
+  p.style.display='block';
+  p.innerHTML=`<button class=btn-sm onclick=prevPage() ${jobPage<=1?'disabled':''}>← 上一页</button>`+
+    `<span style="margin:0 12px;color:#8b949e">第 ${jobPage} / ${pages} 页 · 共 ${total} 个岗位</span>`+
+    `<button class=btn-sm onclick=nextPage() ${jobPage>=pages?'disabled':''}>下一页 →</button>`;
+}
+function prevPage(){
+  if(jobPage>1){jobPage--;renderJobs(window._lastJobs||[]);}
+}
+function nextPage(){
+  const total=(window._lastJobs||[]).length;
+  if(jobPage*JOBS_PER_PAGE<total){jobPage++;renderJobs(window._lastJobs||[]);}
 }
 async function doApply(i){
   const j=window._lastJobs[i];

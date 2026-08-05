@@ -19,6 +19,11 @@ class LoginRequired(RuntimeError):
     """平台需要用户手动登录。抛出时浏览器已停留在登录页，等待用户手动完成。"""
 
 
+# 每个关键词最多拉取页数 / 滚动次数（"查看更多"）
+WUYOU_MAX_PAGES = 3
+SCROLL_ROUNDS = 5
+
+
 # ── 通用解析工具 ──────────────────────────────────────────
 
 def parse_salary(text: str) -> tuple[int, int]:
@@ -111,24 +116,38 @@ def _wuyou_params(keyword: str, city_code: str, page_size: int = 20) -> dict:
 
 
 def search_wuyou(keyword: str, city_code: str, page_size: int = 20) -> list[dict]:
-    """HTTP 快路径 → 被 WAF 拦截时降级 Chrome headless 解析 DOM。"""
+    """HTTP 快路径（多页拉取）→ 被 WAF 拦截时降级 Chrome headless 滚动解析。"""
     try:
-        return _wuyou_http(keyword, city_code, page_size)
+        return _wuyou_http(keyword, city_code, page_size, WUYOU_MAX_PAGES)
     except Exception:
         return _wuyou_chrome(keyword, city_code, page_size)
 
 
-def _wuyou_http(keyword: str, city_code: str, page_size: int) -> list[dict]:
-    url = WUYOU_API + "?" + urllib.parse.urlencode(_wuyou_params(keyword, city_code, page_size))
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json, text/plain, */*",
-    })
-    with urllib.request.urlopen(req, timeout=20) as r:
-        body = r.read().decode("utf-8", errors="replace")
-    if not body.lstrip().startswith("{"):
-        raise RuntimeError("WAF blocked")
-    return _parse_wuyou_items(json.loads(body))
+def _wuyou_http(keyword: str, city_code: str, page_size: int, max_pages: int) -> list[dict]:
+    jobs: list[dict] = []
+    seen: set[str] = set()
+    for page in range(1, max_pages + 1):
+        params = _wuyou_params(keyword, city_code, page_size)
+        params["pageNum"] = str(page)
+        url = WUYOU_API + "?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+        })
+        with urllib.request.urlopen(req, timeout=20) as r:
+            body = r.read().decode("utf-8", errors="replace")
+        if not body.lstrip().startswith("{"):
+            raise RuntimeError("WAF blocked")
+        items = _parse_wuyou_items(json.loads(body))
+        if not items:
+            break
+        for j in items:
+            if j["url"] and j["url"] not in seen:
+                seen.add(j["url"])
+                jobs.append(j)
+        if len(items) < page_size:
+            break  # 最后一页
+    return jobs
 
 
 def _parse_wuyou_items(data: dict) -> list[dict]:
@@ -200,14 +219,24 @@ def _wuyou_chrome(keyword: str, city_code: str, page_size: int) -> list[dict]:
         try:
             page.goto(land_url, timeout=45000, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
-            # 等结果渲染：出现岗位链接或提示无结果
-            deadline = time.time() + 25
-            cards = []
-            while time.time() < deadline:
-                cards = page.evaluate(_WUYOU_EXTRACT_JS) or []
-                if cards:
-                    break
-                page.wait_for_timeout(2500)
+            # 滚动加载更多，滚动两轮无新结果即结束
+            cards: list[dict] = []
+            seen: set[str] = set()
+            no_new = 0
+            for _ in range(SCROLL_ROUNDS + 3):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(2000)
+                batch = page.evaluate(_WUYOU_EXTRACT_JS) or []
+                new = [c for c in batch if c.get("url") and c["url"] not in seen]
+                for c in new:
+                    seen.add(c["url"])
+                    cards.append(c)
+                if not new:
+                    no_new += 1
+                    if no_new >= 2:
+                        break
+                else:
+                    no_new = 0
             return cards
         finally:
             browser_inst.close()
@@ -267,8 +296,24 @@ def search_boss(keyword: str, city_code: str) -> list[dict]:
             keep_tab = True
             browser.navigate(tab, _platform_login_url("boss_zhipin"))
             raise LoginRequired("BOSS直聘需要登录：浏览器已停在登录页，请手动完成登录后回来点「已登录，继续」")
-        raw = browser.evaluate(tab, _BOSS_EXTRACT_JS)
-        cards = json.loads(raw) if raw else []
+        cards: list[dict] = []
+        seen: set[str] = set()
+        no_new = 0
+        for _ in range(SCROLL_ROUNDS):
+            raw = browser.evaluate(tab, _BOSS_EXTRACT_JS)
+            batch = json.loads(raw) if raw else []
+            new = [c for c in batch if c.get("url") and c["url"] not in seen]
+            for c in new:
+                seen.add(c["url"])
+                cards.append(c)
+            if not new:
+                no_new += 1
+                if no_new >= 2:
+                    break
+            else:
+                no_new = 0
+            browser.evaluate(tab, "window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(2)
         if not cards:
             raise RuntimeError("BOSS直聘未解析到岗位（可能被风控拦截或页面结构变化）")
         for c in cards:
@@ -325,8 +370,24 @@ def search_shixiseng(keyword: str, city: str) -> list[dict]:
             keep_tab = True
             browser.navigate(tab, _platform_login_url("shixiseng"))
             raise LoginRequired("实习僧需要登录：浏览器已停在登录页，请手动完成登录后回来点「已登录，继续」")
-        raw = browser.evaluate(tab, _SXS_EXTRACT_JS)
-        cards = json.loads(raw) if raw else []
+        cards: list[dict] = []
+        seen: set[str] = set()
+        no_new = 0
+        for _ in range(SCROLL_ROUNDS):
+            raw = browser.evaluate(tab, _SXS_EXTRACT_JS)
+            batch = json.loads(raw) if raw else []
+            new = [c for c in batch if c.get("url") and c["url"] not in seen]
+            for c in new:
+                seen.add(c["url"])
+                cards.append(c)
+            if not new:
+                no_new += 1
+                if no_new >= 2:
+                    break
+            else:
+                no_new = 0
+            browser.evaluate(tab, "window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(2)
         if not cards:
             empty = browser.evaluate(tab,
                 "document.body.innerText.indexOf('暂无') >= 0 || document.body.innerText.indexOf('没有找到') >= 0")

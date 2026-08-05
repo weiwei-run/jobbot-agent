@@ -277,10 +277,17 @@ def run_search(intent: str, city: str = "南京", page_size: int = 20) -> dict:
         elif pkey not in login_required:
             warnings.append(f"{name}：未找到岗位（可能需要登录/更换关键词）")
 
+    # 候选过多时先限量（避免一次性 LLM 评分爆量）
+    if len(all_jobs) > 100:
+        all_jobs = all_jobs[:100]
+    total_candidates = len(all_jobs)
     all_jobs = score_jobs(all_jobs, intent)
     all_jobs.sort(key=lambda j: j.get("score", 0), reverse=True)
+    filtered = sum(1 for j in all_jobs if j.get("score", 0) < 3)
+    all_jobs = [j for j in all_jobs if j.get("score", 0) >= 3]
     return {"keywords": keywords, "jobs": all_jobs, "warnings": warnings,
-            "login_required": login_required}
+            "login_required": login_required,
+            "filtered": filtered}
 
 
 def score_jobs(jobs: list[dict], intent: str) -> list[dict]:
