@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-08-06 #0 — 建立 OpenSpec 基线 + 变更约定
+
+- **动作**: 通读代码生成 6 能力域基线规格（user-config / platform-automation / job-search / apply-and-tracking / local-dashboard / online-sync），归档为 `openspec/changes/archive/2026-08-06-initial-project-baseline/`
+- **约定**: 是否改变用户可见行为/数据格式/外部接口 → 是走完整 OpenSpec 流程，否则轻量处理（skip_specs 或 run-log）；已写入根目录 `AGENTS.md`，重启 Codex 自动加载
+- **注意**: 本机 `openspec archive` 报 EPERM（Node 目录改名问题），采用手动合并+Move-Item 归档
+
 ## 2026-07-20 #1 — 配置向导测试
 
 - **Agent**: OpenCode v1.18.3
