@@ -79,6 +79,8 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
 .filters button.active{background:var(--accent);border-color:var(--accent);color:#fff}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 #toast{position:fixed;top:16px;right:16px;background:var(--good);color:#000;padding:10px 20px;border-radius:6px;font-weight:600;z-index:99;transition:opacity .3s}
+/* 搜索进度悬浮提示：固定右上角、不拦截任何点击、搜索期间常驻、结束后自动收起 */
+#search-status.search-float{position:fixed;top:52px;right:16px;background:var(--card);border:1px solid var(--border);color:var(--fg);padding:8px 14px;border-radius:8px;font-size:12px;line-height:1.5;max-width:340px;z-index:98;box-shadow:0 4px 14px rgba(0,0,0,.45);pointer-events:none}
 .job-card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px}
 .job-card .top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .job-card .pos{font-weight:600}.job-card .comp{color:#8b949e;font-size:12px}
@@ -164,7 +166,7 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
 <section id=search-section class=hidden>
   <h3>🔍 第三步：三平台搜索 + AI 评分
     <button onclick=runSearch()>⚡ 开始搜索</button>
-    <span id=search-status style="font-size:12px;color:#8b949e"></span>
+    <span id=search-status class="search-float hidden"></span>
   </h3>
   <div id=search-warnings></div>
   <div id=kw-box class=row style="margin-top:0"></div>
@@ -367,9 +369,17 @@ async function uploadResume(input){
   if(d._error){toast('❌ '+d._error);return;}
   if(parsed.length){
     const newParse=parsed.join('，');
-    const sp=splitIntent(document.getElementById('cfg-intent').value);
+    // 重传时替换旧解析块，而不是叠加：
+    // 1) 剥掉末尾的旧解析块（_resumeParse）
+    // 2) 若剩余部分仍是旧的解析块文本（以 姓名:/学历: 等结构化标签开头），一并丢弃
+    let manual=document.getElementById('cfg-intent').value.trim();
+    if(_resumeParse){
+      const idx=manual.lastIndexOf(_resumeParse);
+      if(idx>=0){ manual=manual.slice(0,idx).replace(/[，,]\s*$/,'').trim(); }
+    }
+    if(/^(姓名|学历|学校|专业|意向岗位|技能|证书|经历|期望薪资|毕业年份|目标城市)[:：]/.test(manual)) manual='';
     _resumeParse=newParse;
-    document.getElementById('cfg-intent').value=sp.intent?(sp.intent+'，'+newParse):newParse;
+    document.getElementById('cfg-intent').value=manual?(manual+'，'+newParse):newParse;
     if(d.city)document.getElementById('cfg-city').value=d.city;
     showApp();
     toast('✅ 已用新简历刷新意向描述');
@@ -453,11 +463,12 @@ async function runSearch(){
   const btn=document.querySelector('#search-section h3 button');
   btn.disabled=true;
   st.textContent='⏳ 正在启动搜索…';
+  st.hidden=false;
   const t0=Date.now();
   try{
     const r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({intent,city})});
     const d=await r.json();
-    if(!d.ok){toast('❌ '+d.error);st.textContent='';btn.disabled=false;return;}
+    if(!d.ok){toast('❌ '+d.error);st.textContent='❌ '+d.error;setTimeout(()=>st.hidden=true,8000);btn.disabled=false;return;}
     // 轮询进度：实时显示正在做什么
     const timer=setInterval(async ()=>{
       try{
@@ -468,16 +479,17 @@ async function runSearch(){
         if(s.running)return;
         clearInterval(timer);
         btn.disabled=false;
-        if(s.error){st.textContent='❌ '+s.error;toast('❌ '+s.error);return;}
+        if(s.error){st.textContent='❌ '+s.error;toast('❌ '+s.error);setTimeout(()=>st.hidden=true,8000);return;}
         renderSearchResult(s.result||{});
         const jobs=s.result&&s.result.jobs||[];
         const extra=[];
-        if(s.result&&s.result.filtered)extra.push('已过滤 '+s.result.filtered+' 个不匹配岗位');
+        if(s.result&&s.result.filtered)extra.push('已过滤 '+s.result.filtered+' 个不匹配/未核实岗位');
         if(s.result&&s.result.offline)extra.push('已过滤 '+s.result.offline+' 个已下线岗位');
         st.textContent=`共找到 ${jobs.length} 个岗位${extra.length?'（'+extra.join('、')+'）':''}，点击「投递」自动投递`;
-      }catch(e){clearInterval(timer);btn.disabled=false;toast('❌ 搜索状态获取失败');}
+        setTimeout(()=>st.hidden=true,10000);
+      }catch(e){clearInterval(timer);btn.disabled=false;toast('❌ 搜索状态获取失败');st.textContent='❌ 搜索状态获取失败';setTimeout(()=>st.hidden=true,8000);}
     },1000);
-  }catch(e){btn.disabled=false;toast('❌ 搜索启动失败');}
+  }catch(e){btn.disabled=false;toast('❌ 搜索启动失败');st.textContent='❌ 搜索启动失败';setTimeout(()=>st.hidden=true,8000);}
 }
 function renderSearchResult(d){
   document.getElementById('kw-box').innerHTML=(d.keywords||[]).map(k=>`<span class=kw>${esc(k)}</span>`).join('')||'';
@@ -489,14 +501,18 @@ function renderSearchResult(d){
   }
   checkEnv();
   jobPage=1;
-  renderJobs(d.jobs||[]);
+  renderJobs(d.jobs||[], d);
   showApp();
 }
-function renderJobs(jobs){
+function renderJobs(jobs, summary){
   window._lastJobs=jobs||[];
   const el=document.getElementById('job-list');
   if(!jobs.length){
-    el.innerHTML='<p style="color:#8b949e;line-height:2">😕 没有找到 3 星及以上的匹配岗位。<br>'+
+    const parts=[];
+    if(summary&&summary.filtered)parts.push('过滤掉 '+summary.filtered+' 个不匹配/未核实岗位');
+    if(summary&&summary.offline)parts.push('过滤掉 '+summary.offline+' 个已下线岗位');
+    el.innerHTML='<p style="color:#8b949e;line-height:2">😕 没有找到符合条件的岗位'+
+      (parts.length?'（'+parts.join('、')+'）':'')+'。<br>'+
       '建议：完善「意向描述」（目标城市、岗位方向、技能、薪资期望），或调整关键词/平台过滤规则，然后重新搜索。</p>';
     document.getElementById('pager').style.display='none';
     return;

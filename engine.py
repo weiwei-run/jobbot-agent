@@ -16,12 +16,16 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from concurrent.futures import ThreadPoolExecutor
+
 from llm import chat_json
-from platforms import LoginRequired, apply_filters, mark_risk
+from platforms import (DEGREE_RANK, LoginRequired, apply_filters, extract_city,
+                       extract_location, jd_required_degree, mark_risk, verify_job)
 
 ROOT = Path(__file__).parent
 DATA_FILE = ROOT / "data" / "applications.json"
 PLATFORMS_FILE = ROOT / "config" / "platforms.yml"
+USER_PROFILE_FILE = ROOT / "config" / "user_profile.json"
 
 # 会话内登录状态缓存（平台 key → bool）。False/缺失 = 需要重新检测。
 _LOGIN_CACHE: dict[str, bool] = {}
@@ -34,10 +38,6 @@ CITY_CODES = {
     "重庆": "060000", "郑州": "150200", "合肥": "110200", "无锡": "070400",
     "宁波": "081000", "青岛": "120200", "厦门": "100300", "佛山": "030800",
 }
-
-# 学历硬指标等级（数值越大要求越高）
-DEGREE_RANK = {"高中": 0, "中专": 0, "大专": 1, "本科": 2, "硕士": 3, "博士": 4}
-
 
 # ── 轻量 YAML 解析（只支持本项目 platforms.yml 用到的子集）──
 
@@ -137,63 +137,92 @@ def _p(progress: dict | None, step: str, detail: str = ""):
         progress["detail"] = detail
 
 
-def _user_profile(intent: str) -> dict:
-    """从意向描述提取用户硬指标（学历/工作年限）。"""
+def load_user_profile() -> dict:
+    """读取 config/user_profile.json（求职意向 + 简历解析结果）；缺失/损坏返回空 dict。"""
+    if not USER_PROFILE_FILE.exists():
+        return {}
+    try:
+        data = json.loads(USER_PROFILE_FILE.read_text(encoding="utf-8", errors="ignore"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _user_profile(intent: str, resume_parse: str = "") -> dict:
+    """提取用户硬指标（最高学历）：优先简历解析结果，意向文本仅兜底。"""
     p: dict = {}
-    m = re.search(r"学历[:：]\s*(大专|本科|硕士|博士|中专|高中|研究生)", intent)
-    if m:
-        p["education"] = "硕士" if m.group(1) == "研究生" else m.group(1)
-    m = re.search(r"(\d+)\s*年(?:以上)?(?:工作|实操|相关)?经验", intent)
-    if m:
-        p["work_years"] = int(m.group(1))
-    if re.search(r"应届|在校生|无经验", intent):
-        p.setdefault("work_years", 0)
+    for text in (resume_parse, intent):
+        m = re.search(r"学历[:：]\s*(博士|硕士|本科|大专|中专|高中|研究生)", text or "")
+        if m:
+            p["education"] = "硕士" if m.group(1) == "研究生" else m.group(1)
+            break
     return p
 
 
-def _jd_required_degree(jd: str) -> int:
-    """JD 要求的最低学历等级，0 = 不限/无明确要求。"""
-    if re.search(r"学历\s*(不限|无要求)", jd):
-        return 0
-    m = re.search(r"(?:学历|要求)[:：]?\s*(博士|硕士|本科|大专|中专|高中)", jd)
-    if m:
-        return DEGREE_RANK[m.group(1)]
-    m = re.search(r"(统招|全日制)?\s*(博士|硕士|本科|大专|中专|高中)[及以]?上?", jd)
-    if m:
-        return DEGREE_RANK[m.group(2)]
-    return 0
-
-
-def _jd_required_years(jd: str) -> int:
-    """JD 要求的最低工作年限，0 = 不限。"""
-    if re.search(r"经验\s*(不限|无要求)", jd):
-        return 0
-    m = re.search(r"(\d+)\s*年(?:及|以)?上", jd)
-    if m:
-        return int(m.group(1))
-    m = re.search(r"工作\s*(\d+)\s*年", jd)
-    if m:
-        return int(m.group(1))
-    return 0
-
-
 def _hard_filter(job: dict, profile: dict, city: str) -> bool:
-    """硬指标过滤：学历/年限/地域不满足直接剔除（不看 LLM 评分）。"""
+    """硬指标过滤（学历/地点）：卡片数据能确定的直接剔除，不能确定的打标记待详情核实。
+
+    返回 True = 保留；并在 job 上打 location_ok / degree_ok 标记。
+    """
     jd = job.get("jd_summary") or ""
+    degree_field = job.get("degree") or ""
     edu = profile.get("education")
     if edu and edu in DEGREE_RANK:
-        if _jd_required_degree(jd) > DEGREE_RANK[edu]:
-            return False
-    if "work_years" in profile:
-        need = _jd_required_years(jd)
-        if need and profile["work_years"] < need:
-            return False
-    loc = job.get("location") or ""
-    if loc and city and city not in loc:
-        for c in CITY_CODES:
-            if c in loc:
+        # 51job 学历字段来自搜索 API（可信）；BOSS/实习僧卡片学历标签不可信，交给详情页核实
+        if job.get("platform") == "51job":
+            need = max(jd_required_degree(jd), jd_required_degree(degree_field))
+            if need > DEGREE_RANK[edu]:
                 return False
+            job["degree_ok"] = need > 0
+        else:
+            job["degree_ok"] = False
+    else:
+        # 画像缺学历 → 不启用学历硬过滤（调用方会在警告中提示）
+        job["degree_ok"] = True
+    loc = job.get("location") or ""
+    ccity = extract_city(loc)
+    if ccity:
+        if ccity != city:
+            return False
+        job["location_ok"] = True
+    else:
+        # 卡片地点只有区名/无城市 → 待详情页核实
+        job["location_ok"] = False
     return True
+
+
+def _passes_verified_hard(job: dict, v: dict, profile: dict, city: str) -> bool:
+    """详情页核实结果 vs 硬指标（学历/地点）。返回 True = 保留。"""
+    edu = profile.get("education")
+    if edu and edu in DEGREE_RANK and v.get("degree"):
+        if v["degree"] > DEGREE_RANK[edu]:
+            return False
+    vcity = extract_city(v.get("location") or "")
+    if vcity:
+        return vcity == city
+    # 详情页没解析出城市：卡片有城市则用卡片判断，否则视为无法确认 → 不展示
+    ccity = extract_city(job.get("location") or "")
+    if ccity:
+        return ccity == city
+    return False
+
+
+def _verify_many(jobs: list[dict], progress: dict | None, step: str) -> list[dict]:
+    """并发核实岗位详情（浏览器并发受 platforms 信号量限制 ≤3）。返回与 jobs 对齐的结果。"""
+    def _run(j: dict) -> dict:
+        try:
+            return verify_job(j)
+        except Exception:
+            return {"offline": False, "degree": 0, "location": "", "verified": False}
+
+    out: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for idx, v in enumerate(ex.map(_run, jobs), 1):
+            out.append(v)
+            _p(progress, step, f"正在核实岗位（{idx}/{len(jobs)}）")
+    return out
 
 
 # ── 数据存储 ────────────────────────────────────────────
@@ -341,7 +370,10 @@ def run_search(intent: str, city: str = "南京", page_size: int = 20,
 
     _p(progress, "生成搜索关键词")
     keywords = generate_keywords(intent)
-    profile = _user_profile(intent)
+    profile_data = load_user_profile()
+    profile = _user_profile(intent, profile_data.get("resume_parse") or "")
+    if not profile.get("education"):
+        warnings.append("未从简历解析/意向中识别到最高学历，学历硬过滤未生效，请完善意向描述")
     all_jobs: list[dict] = []
     seen: set = set()
     for pkey, pcfg in active_platforms.items():
@@ -380,39 +412,53 @@ def run_search(intent: str, city: str = "南京", page_size: int = 20,
         elif pkey not in login_required:
             warnings.append(f"{name}：未找到岗位（可能需要登录/更换关键词）")
 
-    # 硬指标过滤（评分前剔除，节省 LLM 调用）
-    _p(progress, "硬指标过滤", "学历/年限/地域不满足的岗位直接剔除")
+    # ── 阶段 A1：评分前确定性硬指标过滤（学历/地点，卡片数据）──
+    _p(progress, "硬指标过滤", "学历/地点不满足的岗位直接剔除")
     before = len(all_jobs)
-    all_jobs = [j for j in all_jobs if _hard_filter(j, profile, city)]
-    hard_removed = before - len(all_jobs)
+    kept_a = [j for j in all_jobs if _hard_filter(j, profile, city)]
+    filtered = before - len(kept_a)
+    all_jobs = kept_a
 
     # 候选过多时先限量（避免一次性 LLM 评分爆量）
     if len(all_jobs) > 100:
         all_jobs = all_jobs[:100]
+
+    # ── LLM 评分：低于 3 星不展示，每轮最多保留 10 个候选 ──
     _p(progress, "AI 评分", f"共 {len(all_jobs)} 个候选岗位")
-    total_candidates = len(all_jobs)
     all_jobs = score_jobs(all_jobs, intent)
     all_jobs.sort(key=lambda j: j.get("score", 0), reverse=True)
-    filtered = sum(1 for j in all_jobs if j.get("score", 0) < 3)
-    filtered += hard_removed
+    filtered += sum(1 for j in all_jobs if j.get("score", 0) < 3)
     all_jobs = [j for j in all_jobs if j.get("score", 0) >= 3]
+    all_jobs = all_jobs[:10]
 
-    # 已下线/审核中岗位过滤（只校验评分达标的岗位，节省请求）
+    # ── 阶段 A2：只对评分前 10 名候选开详情页核实（下线/学历/地点）──
+    # 列表卡片数据不可信（BOSS 列表地点/学历可能与详情不符），一律以详情页为准；
+    # 核实通过且硬指标满足才展示，杜绝「卡片南京、详情长沙」与「已下线」泄漏
     offline = 0
     if all_jobs:
-        _p(progress, "校验岗位有效性", "正在过滤已下线/审核中的岗位")
-        from concurrent.futures import ThreadPoolExecutor
-        from platforms import job_offline
+        _p(progress, "校验岗位有效性", f"正在核实岗位（0/{len(all_jobs)}）")
+        verified_jobs: list[dict] = []
+        for j, v in zip(all_jobs, _verify_many(all_jobs, progress, "校验岗位有效性")):
+            if v["offline"]:
+                offline += 1
+                continue
+            if not v["verified"]:
+                filtered += 1
+                continue
+            if not _passes_verified_hard(j, v, profile, city):
+                filtered += 1
+                continue
+            if v.get("location"):
+                j["location"] = (extract_location(v["location"])
+                                 or extract_city(v["location"])
+                                 or j.get("location", ""))
+            j["verified"] = True
+            verified_jobs.append(j)
+        all_jobs = verified_jobs
 
-        def _keep(j: dict):
-            if j.get("platform") == "51job" and j.get("url") and job_offline(j["url"]):
-                return None
-            return j
-
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            kept = list(ex.map(_keep, all_jobs))
-        offline = sum(1 for j in all_jobs if j not in kept)
-        all_jobs = [j for j in kept if j]
+    if not all_jobs:
+        warnings.append("没有找到合适的岗位：本次候选已全部被过滤（不匹配、已下线或无法核实）。"
+                        "建议调整关键词、完善意向描述或稍后再试。")
 
     _p(progress, "完成", f"共找到 {len(all_jobs)} 个匹配岗位")
     return {"keywords": keywords, "jobs": all_jobs, "warnings": warnings,
@@ -433,8 +479,9 @@ def score_jobs(jobs: list[dict], intent: str) -> list[dict]:
     prompt = (
         "你是求职匹配评分专家。根据求职者意向，对每个岗位评 1~5 星：\n"
         "5星=专业高度匹配+学历符合+城市符合；4星=相关可投；3星=沾边可试；2星=勉强；1星=不投\n"
-        "硬性要求必须一票否决：学历不达标、经验年限不够、工作地点不在目标城市、必需技能缺失 → 一律打 1 星，"
+        "硬性要求必须一票否决：学历不达标、工作地点不在目标城市、必需技能缺失 → 一律打 1 星，"
         "即使其他方面再好也不行，并在 reason 里说明是哪个硬指标不满足。\n"
+        "经验年限不作为硬性否决项，仅作参考因素，不要因为岗位要求经验而单独打 1 星。\n"
         "只返回 JSON：{\"scores\": [{\"i\": 0, \"score\": 4, \"reason\": \"一句话理由\"}, ...]}\n"
         f"求职意向：{intent}\n岗位列表：{json.dumps(brief, ensure_ascii=False)}"
     )

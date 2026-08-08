@@ -42,3 +42,12 @@
 - 投递后必须验证成功状态，不假设成功
 - 数据本地化：密钥/简历/记录只存本地，`config/llm.json`、`data/resume/` 等不入库
 - 中文注释与界面文案；JSON/YAML 统一 UTF-8
+
+## 图片自动识别（OCR）约定
+
+- 当前 Codex 走 DeepSeek 模型，**不支持图片输入**，不要依赖 `view_image` 等视觉工具。
+- 用户消息中出现图片附件、粘贴的截图或本地图片路径（`.png/.jpg/.jpeg/.bmp/.gif/.webp`）时，
+  **必须先运行** `powershell -ExecutionPolicy Bypass -File scripts/ocr_image.ps1 <图片路径>`
+  提取文字，再基于 OCR 结果回复；不得跳过识别或猜测图片内容。
+- 多张图片逐个识别；若识别失败或文字为空，如实告知用户，并请其提供文字版内容。
+- 若用户直接粘贴图片导致模型侧报错，提示用户改为把图片文件路径发过来。

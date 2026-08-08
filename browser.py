@@ -294,6 +294,61 @@ def close_tab(tab_id: str):
         pass
 
 
+def open_page_text(url: str, timeout: int = 15, markers: list[str] | None = None) -> dict:
+    """打开页面并等待正文加载，返回 {ok, text, login, message}。用于岗位详情核实。
+
+    markers: 命中任一标记即认为页面就绪并立即返回（用于快速识别「已下线/审核中」等状态页）。
+    """
+    ensured = ensure_camofox()
+    if not ensured["ok"]:
+        return {"ok": False, "text": "", "login": False,
+                "message": ensured.get("message", "Camofox 不可用")}
+    tab = create_tab(url)
+    if not tab:
+        return {"ok": False, "text": "", "login": False, "message": "创建标签页失败"}
+    try:
+        deadline = time.time() + timeout
+        last_text = ""
+        prev_text = ""
+        stable = 0
+        while time.time() < deadline:
+            try:
+                cur = evaluate(tab, "location.href") or ""
+            except Exception:
+                cur = ""
+            if "login" in cur.lower() or "passport" in cur.lower():
+                return {"ok": False, "text": "", "login": True,
+                        "message": "详情页跳转登录页"}
+            try:
+                text = evaluate(tab, "document.body.innerText") or ""
+            except Exception:
+                text = ""
+            if text:
+                last_text = text
+                if "验证码登录" in text or "APP扫码登录" in text:
+                    return {"ok": False, "text": "", "login": True,
+                            "message": "详情页出现登录墙"}
+                if markers and any(m in text for m in markers):
+                    return {"ok": True, "text": text, "login": False, "message": ""}
+                if len(text) > 200:
+                    # SPA 内容可能后渲染：连续两轮文本相同才认为加载完成
+                    if text == prev_text:
+                        stable += 1
+                        if stable >= 2:
+                            return {"ok": True, "text": text, "login": False, "message": ""}
+                    else:
+                        stable = 0
+                    prev_text = text
+            time.sleep(1)
+        if last_text:
+            return {"ok": True, "text": last_text, "login": False, "message": ""}
+        return {"ok": False, "text": "", "login": False, "message": "等待页面内容超时"}
+    except Exception as e:
+        return {"ok": False, "text": "", "login": False, "message": str(e)[:200]}
+    finally:
+        close_tab(tab)
+
+
 def wait_js(tab_id: str, expression: str, timeout: int = 30) -> str:
     """轮询执行 JS 直到返回真值，返回最后一次结果。"""
     deadline = time.time() + timeout

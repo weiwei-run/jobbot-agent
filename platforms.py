@@ -8,6 +8,7 @@ BOSS直聘 / 实习僧：Camofox 浏览器驱动（反检测），投递前需�
 """
 import json
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -27,19 +28,117 @@ SCROLL_ROUNDS = 5
 OFFLINE_MARKERS = [
     "审核中", "已下线", "职位已关闭", "招聘已结束", "已暂停招聘",
     "职位不存在", "该职位已下线", "该职位已暂停", "职位已失效", "岗位已下线",
+    "已下架", "该职位已下架", "职位已下架", "已停止招聘", "停止招聘",
+    "暂不招聘", "岗位已关闭", "职位已结束",
 ]
 
+# 城市名表（与 engine.CITY_CODES 对应，用于地点硬过滤）
+CITY_NAMES = [
+    "北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "苏州", "西安",
+    "长沙", "天津", "重庆", "郑州", "合肥", "无锡", "宁波", "青岛", "厦门",
+    "佛山", "南京",
+]
+# 地点文本中出现这些词时视为「无法定位具体城市」（全国/不限等）
+_CITY_INVALID_WORDS = ("全国", "不限", "其他", "异地", "海外", "国外")
 
-def job_offline(url: str) -> bool:
-    """HTTP 请求岗位详情页，检测是否已下线/审核中。网络异常不误杀（返回 False）。"""
+
+def extract_city(text: str) -> str:
+    """从文本中提取第一个命中的城市名；无城市或命中「全国/不限」等无效词返回 ''。"""
+    if not text:
+        return ""
+    if any(w in text for w in _CITY_INVALID_WORDS):
+        return ""
+    for c in CITY_NAMES:
+        if c in text:
+            return c
+    return ""
+
+
+def extract_location(text: str) -> str:
+    """从文本提取「城市·区/县」片段（如 南京·江宁区 / 长沙-望城区），找不到返回 ''。"""
+    if not text:
+        return ""
+    for c in CITY_NAMES:
+        m = re.search(re.escape(c) + r"(?:市)?\s*[-·—]?\s*[\u4e00-\u9fa5]{2,6}(?:区|县)", text)
+        if m:
+            return m.group(0).replace(" ", "")
+    return ""
+
+
+# 学历硬指标等级（数值越大要求越高）
+DEGREE_RANK = {"高中": 0, "中专": 0, "大专": 1, "本科": 2, "硕士": 3, "博士": 4}
+
+
+def jd_required_degree(text: str) -> int:
+    """从岗位文本提取最低学历等级，0 = 不限/无明确要求。"""
+    if not text:
+        return 0
+    if re.search(r"学历\s*(不限|无要求)", text):
+        return 0
+    m = re.search(r"(?:学历|要求)[:：]?\s*(博士|硕士|本科|大专|中专|高中)", text)
+    if m:
+        return DEGREE_RANK[m.group(1)]
+    m = re.search(r"(统招|全日制)?\s*(博士|硕士|本科|大专|中专|高中)[及以]?上?", text)
+    if m:
+        return DEGREE_RANK[m.group(2)]
+    return 0
+
+
+# 浏览器详情核实并发限制（同时最多开 3 个 Camofox tab）
+_BROWSER_VERIFY_SEM = threading.Semaphore(3)
+
+
+def verify_job(job: dict) -> dict:
+    """核实岗位详情：下线状态 + 学历/城市硬指标。返回 {offline, degree, location, verified}。
+
+    - offline: 详情页出现「已下线/审核中」等失效特征
+    - degree: 详情页要求的最低学历等级（0 = 不限/未写明）
+    - location: 详情页正文片段（供 extract_city 判断城市）
+    - verified: 详情页是否成功读取；False = 网络/风控/登录墙导致无法核实
+    """
+    url = job.get("url") or ""
+    platform = job.get("platform", "")
+    if not url:
+        # 无链接的岗位无法投递也无法核实，直接视为失效
+        return {"offline": True, "degree": 0, "location": "", "verified": True}
+    if platform == "51job":
+        return _verify_wuyou(url)
+    if platform in ("BOSS直聘", "实习僧"):
+        return _verify_browser(url)
+    return {"offline": False, "degree": 0, "location": "", "verified": False}
+
+
+def _verify_wuyou(url: str) -> dict:
+    """51job：HTTP 请求服务端渲染的详情页。网络异常/WAF 拦截视为无法核实。"""
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
         with urllib.request.urlopen(req, timeout=10) as r:
             html = r.read(300000).decode("utf-8", errors="ignore")
-        return any(m in html for m in OFFLINE_MARKERS)
     except Exception:
-        return False
+        return {"offline": False, "degree": 0, "location": "", "verified": False}
+    if any(m in html for m in OFFLINE_MARKERS):
+        return {"offline": True, "degree": 0, "location": "", "verified": True}
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\s+", " ", text).strip()
+    return {"offline": False, "degree": jd_required_degree(text),
+            "location": text[:800], "verified": True}
+
+
+def _verify_browser(url: str) -> dict:
+    """BOSS直聘/实习僧：Camofox 打开详情页取正文核实（并发 tab ≤ 3）。"""
+    with _BROWSER_VERIFY_SEM:
+        try:
+            r = browser.open_page_text(url, timeout=15, markers=OFFLINE_MARKERS)
+        except Exception:
+            return {"offline": False, "degree": 0, "location": "", "verified": False}
+    if not r.get("ok"):
+        return {"offline": False, "degree": 0, "location": "", "verified": False}
+    text = r.get("text") or ""
+    if any(m in text for m in OFFLINE_MARKERS):
+        return {"offline": True, "degree": 0, "location": "", "verified": True}
+    return {"offline": False, "degree": jd_required_degree(text),
+            "location": text[:800], "verified": True}
 
 
 # ── 通用解析工具 ──────────────────────────────────────────
@@ -60,6 +159,19 @@ def parse_salary(text: str) -> tuple[int, int]:
         unit = 10000 if m.group(2) == "万" else 1000 if m.group(2) == "千" else 1
         return int(v * unit), int(v * unit)
     return 0, 0
+
+
+def _parse_extract(raw) -> list:
+    """Camofox evaluate 结果可能是结构化数组，也可能是 JSON 字符串，统一转成 list。"""
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+    return []
 
 
 def apply_filters(job: dict, pcfg: dict) -> bool:
@@ -194,7 +306,7 @@ def _parse_wuyou_items(data: dict) -> list[dict]:
 
 
 _WUYOU_EXTRACT_JS = r"""
-() => {
+(() => {
   const out = [];
   // 只取岗位详情页：jobs.51job.com/…/{数字}.html；排除公司页 /all/co*
   const links = Array.from(document.querySelectorAll('a[href*="jobs.51job.com"]')).filter(a => {
@@ -222,7 +334,7 @@ _WUYOU_EXTRACT_JS = r"""
     }
   }
   return out;
-}
+})()
 """
 
 
@@ -269,7 +381,7 @@ def _platform_login_url(key: str) -> str:
 
 
 _BOSS_EXTRACT_JS = r"""
-() => {
+(() => {
   const out = [];
   const pick = (el, sels) => {
     for (const s of sels) { const e = el.querySelector(s); if (e && e.innerText) return e.innerText.trim(); }
@@ -282,13 +394,14 @@ _BOSS_EXTRACT_JS = r"""
     if (out.some(j => j.url === href)) continue;
     const title = pick(c, ['.job-name', '.job-title', '[class*=job-name]', '[class*=job-title]']) || (a ? a.innerText.trim() : '');
     const salary = pick(c, ['.salary', '[class*=salary]']);
-    const company = pick(c, ['.company-name', '.company-info', '.name', '[class*=company]']);
+    // 新版卡片公司名在 span.boss-name；[class*=company] 会误匹配 company-location，不能用
+    const company = pick(c, ['.boss-name', '.company-name', '.company-info', '[class*=boss-name]', '[class*=company-name]', '.name']);
     const area = pick(c, ['.job-area', '.job-location', '[class*=area]', '[class*=location]']);
     const info = pick(c, ['.job-banner', '.job-card-footer', '.info-desc', '[class*=desc]', '[class*=tag]']);
     if (title || company) out.push({position: title, salary, company, location: area, url: href, jd_summary: info});
   }
   return out;
-}
+})()
 """
 
 
@@ -319,7 +432,7 @@ def search_boss(keyword: str, city_code: str) -> list[dict]:
         no_new = 0
         for _ in range(SCROLL_ROUNDS):
             raw = browser.evaluate(tab, _BOSS_EXTRACT_JS)
-            batch = json.loads(raw) if raw else []
+            batch = _parse_extract(raw)
             new = [c for c in batch if c.get("url") and c["url"] not in seen]
             for c in new:
                 seen.add(c["url"])
@@ -345,31 +458,32 @@ def search_boss(keyword: str, city_code: str) -> list[dict]:
 # ── 实习僧 搜索 ─────────────────────────────────────────
 
 _SXS_EXTRACT_JS = r"""
-() => {
+(() => {
   const out = [];
   const links = Array.from(document.querySelectorAll('a[href*="intern"], a[href*="/job/"]'))
     .filter(a => !a.closest('.other-content, [class*=other-content]'));  // 排除「推荐职位」
+  const clean = s => (s || '').replace(/[\uE000-\uF8FF]/g, '').replace(/\s+/g, ' ').trim();
   for (const a of links) {
     const href = a.href || '';
     if (!/shixiseng\.com\/(intern|job)/.test(href)) continue;
     if (out.some(j => j.url === href)) continue;
-    let el = a;
-    for (let i = 0; i < 6; i++) { el = el.parentElement; if (!el) break; }
-    const text = (el && el.innerText || '').replace(/\s+/g, ' ').trim();
-    const title = (a.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 80);
-    if (!text || !title) continue;
-    const sm = text.match(/(\d+[-~至]\d+)\s*(元|千|万)?\/?(日|周|月)?/);
-    const salary = sm ? sm[0] : '';
-    const cm = text.match(/([\u4e00-\u9fa5A-Za-z0-9（）()]+?(?:科技有限公司|科技有限公司|有限公司|科技|集团|股份|工作室|中心))/);
-    const company = cm ? cm[1] : '';
-    const locM = text.match(/([\u4e00-\u9fa5]{2,6}(?:市|区|县))$/);
-    const location = locM ? locM[1] : '';
+    const title = clean(a.innerText).slice(0, 80);
+    if (!title) continue;
+    const card = a.closest('.intern-item, .intern-wrap') || a.parentElement || a;
+    const dayEl = card.querySelector('.day');
+    const salary = dayEl ? clean(dayEl.innerText) : '';
+    const companyEl = card.querySelector('.intern-detail__company .title')
+      || card.querySelector('.company-title, [class*=company] .title');
+    const company = companyEl ? clean(companyEl.innerText || companyEl.getAttribute('title')) : '';
+    const locEl = card.querySelector('.city');
+    const location = locEl ? clean(locEl.innerText) : '';
+    const jd = clean(card.innerText).slice(0, 300);
     if (company || location || salary) {
-      out.push({position: title, salary, company, location, url: href, jd_summary: text.slice(0, 300)});
+      out.push({position: title, salary, company, location, url: href, jd_summary: jd});
     }
   }
   return out;
-}
+})()
 """
 
 
@@ -393,7 +507,7 @@ def search_shixiseng(keyword: str, city: str) -> list[dict]:
         no_new = 0
         for _ in range(SCROLL_ROUNDS):
             raw = browser.evaluate(tab, _SXS_EXTRACT_JS)
-            batch = json.loads(raw) if raw else []
+            batch = _parse_extract(raw)
             new = [c for c in batch if c.get("url") and c["url"] not in seen]
             for c in new:
                 seen.add(c["url"])
