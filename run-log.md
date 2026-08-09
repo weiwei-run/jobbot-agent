@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-08-09 #0 — filter-undeliverable-jobs 收尾：真实登录态实测通过 + 归档；顺带修复 BOSS 薪资乱码
+
+- **动作**: 完成 5.2/5.3——真实登录态下三平台各搜一轮（BOSS直聘 256 / 51job 14 / 实习僧 109 个岗位），
+  最终展示 7 个岗位全部 `verified=True`、`offline=0`、地点均在南京（3 个未通过详情核实的候选被如实过滤）；
+  投递记录流程（add_application / update_status / 重复 URL 转更新 / stats）工具级回归通过；
+  `openspec validate --all` 7/7 通过；delta spec 已合并进 `openspec/specs/job-search/`，
+  变更手动归档至 `openspec/changes/archive/2026-08-09-filter-undeliverable-jobs/`
+- **附带修复（轻量，行为 bug）**: 真实搜索发现 BOSS 卡片薪资显示乱码（如 `-K`）——
+  根因是 BOSS 用图标字体（kanzhun-mix）把薪资数字编码进私有区（U+E031+n = 数字 n），
+  实习僧脚本有清理而 BOSS 没有。修复：`_BOSS_EXTRACT_JS` 增加私有区数字解码 +
+  装饰字符剔除；`verify_job` 新增 `salary` 字段，从详情页明文提取薪资（8-13K / 6千-8千 / 100-200/天）
+  并在展示前覆盖卡片值。实测卡片 5-10K/6-10K/8-13K 与详情页明文逐一吻合
+- **验证**: `python -m py_compile` 通过；详情薪资提取 8 组单测全过；
+  真实 BOSS 搜索 47 张卡片薪资全部干净且含数字
+
+---
+
 ## 2026-08-08 #1 — 修复：重传简历后意向描述未刷新（前端解析块状态 bug，与格式无关）
 
 - **现象**: 先传一份简历、再传另一份 PDF 简历后，【意向描述】仍保留旧内容，目标城市也未变

@@ -89,23 +89,24 @@ _BROWSER_VERIFY_SEM = threading.Semaphore(3)
 
 
 def verify_job(job: dict) -> dict:
-    """核实岗位详情：下线状态 + 学历/城市硬指标。返回 {offline, degree, location, verified}。
+    """核实岗位详情：下线状态 + 学历/城市硬指标。返回 {offline, degree, location, salary, verified}。
 
     - offline: 详情页出现「已下线/审核中」等失效特征
     - degree: 详情页要求的最低学历等级（0 = 不限/未写明）
     - location: 详情页正文片段（供 extract_city 判断城市）
+    - salary: 详情页正文提取的薪资（8-13K / 6千-8千 / 100-200/天），取不到为空
     - verified: 详情页是否成功读取；False = 网络/风控/登录墙导致无法核实
     """
     url = job.get("url") or ""
     platform = job.get("platform", "")
     if not url:
         # 无链接的岗位无法投递也无法核实，直接视为失效
-        return {"offline": True, "degree": 0, "location": "", "verified": True}
+        return {"offline": True, "degree": 0, "location": "", "salary": "", "verified": True}
     if platform == "51job":
         return _verify_wuyou(url)
     if platform in ("BOSS直聘", "实习僧"):
         return _verify_browser(url)
-    return {"offline": False, "degree": 0, "location": "", "verified": False}
+    return {"offline": False, "degree": 0, "location": "", "salary": "", "verified": False}
 
 
 def _verify_wuyou(url: str) -> dict:
@@ -116,13 +117,13 @@ def _verify_wuyou(url: str) -> dict:
         with urllib.request.urlopen(req, timeout=10) as r:
             html = r.read(300000).decode("utf-8", errors="ignore")
     except Exception:
-        return {"offline": False, "degree": 0, "location": "", "verified": False}
+        return {"offline": False, "degree": 0, "location": "", "salary": "", "verified": False}
     if any(m in html for m in OFFLINE_MARKERS):
-        return {"offline": True, "degree": 0, "location": "", "verified": True}
+        return {"offline": True, "degree": 0, "location": "", "salary": "", "verified": True}
     text = re.sub(r"<[^>]+>", " ", html)
     text = re.sub(r"\s+", " ", text).strip()
     return {"offline": False, "degree": jd_required_degree(text),
-            "location": text[:800], "verified": True}
+            "location": text[:800], "salary": _extract_detail_salary(text), "verified": True}
 
 
 def _verify_browser(url: str) -> dict:
@@ -131,14 +132,50 @@ def _verify_browser(url: str) -> dict:
         try:
             r = browser.open_page_text(url, timeout=15, markers=OFFLINE_MARKERS)
         except Exception:
-            return {"offline": False, "degree": 0, "location": "", "verified": False}
+            return {"offline": False, "degree": 0, "location": "", "salary": "", "verified": False}
     if not r.get("ok"):
-        return {"offline": False, "degree": 0, "location": "", "verified": False}
+        return {"offline": False, "degree": 0, "location": "", "salary": "", "verified": False}
     text = r.get("text") or ""
     if any(m in text for m in OFFLINE_MARKERS):
-        return {"offline": True, "degree": 0, "location": "", "verified": True}
+        return {"offline": True, "degree": 0, "location": "", "salary": "", "verified": True}
     return {"offline": False, "degree": jd_required_degree(text),
-            "location": text[:800], "verified": True}
+            "location": text[:800], "salary": _extract_detail_salary(text), "verified": True}
+
+
+_DETAIL_SALARY_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*[-~—至]\s*(\d+(?:\.\d+)?)\s*(万元|千|万|K|k)?\s*(/月|/天|/周)?")
+_DETAIL_SALARY_RE2 = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(千|万)\s*[-~—至]\s*(\d+(?:\.\d+)?)\s*(千|万)\s*(/月|/天|/周)?")
+
+
+def _fmt_salary_num(s: str) -> str:
+    """薪资数字去无意义尾零（8.0 → 8）。"""
+    try:
+        f = float(s)
+        return str(int(f)) if f == int(f) else s
+    except ValueError:
+        return s
+
+
+def _extract_detail_salary(text: str) -> str:
+    """从岗位详情正文提取薪资（如 8-13K / 6千-8千 / 100-200/天）。
+
+    取正文前 400 字内的首个区间匹配（详情页首段通常是「标题 + 薪资」）。
+    """
+    if not text:
+        return ""
+    head = (text or "")[:400]
+    m = _DETAIL_SALARY_RE2.search(head)
+    if m:
+        period = m.group(5) or ""
+        return (f"{_fmt_salary_num(m.group(1))}{m.group(2)}-"
+                f"{_fmt_salary_num(m.group(3))}{m.group(4)}{period}")
+    m = _DETAIL_SALARY_RE.search(head)
+    if m:
+        unit = (m.group(3) or "").upper() if (m.group(3) or "").lower() == "k" else (m.group(3) or "")
+        period = m.group(4) or ""
+        return f"{_fmt_salary_num(m.group(1))}-{_fmt_salary_num(m.group(2))}{unit}{period}"
+    return ""
 
 
 # ── 通用解析工具 ──────────────────────────────────────────
@@ -383,6 +420,12 @@ def _platform_login_url(key: str) -> str:
 _BOSS_EXTRACT_JS = r"""
 (() => {
   const out = [];
+  // BOSS 薪资数字用图标字体（kanzhun-mix）编码在私有区：\uE031+n = 数字 n；
+  // 其余私有区字符是装饰图标，直接剔除
+  const decode = s => (s || '').replace(/[\uE031-\uE03A]/g, ch =>
+      String.fromCharCode(ch.codePointAt(0) - 0xE031 + 48))
+    .replace(/[\uE000-\uF8FF]/g, '').trim();
+  const clean = s => (s || '').replace(/[\uE000-\uF8FF]/g, '').replace(/\s+/g, ' ').trim();
   const pick = (el, sels) => {
     for (const s of sels) { const e = el.querySelector(s); if (e && e.innerText) return e.innerText.trim(); }
     return '';
@@ -392,12 +435,12 @@ _BOSS_EXTRACT_JS = r"""
     const a = c.tagName === 'A' ? c : c.querySelector('a[href*="job_detail"], a[href*="job"]');
     const href = (a && a.href) || '';
     if (out.some(j => j.url === href)) continue;
-    const title = pick(c, ['.job-name', '.job-title', '[class*=job-name]', '[class*=job-title]']) || (a ? a.innerText.trim() : '');
-    const salary = pick(c, ['.salary', '[class*=salary]']);
+    const title = clean(pick(c, ['.job-name', '.job-title', '[class*=job-name]', '[class*=job-title]']) || (a ? a.innerText : ''));
+    const salary = decode(pick(c, ['.salary', '[class*=salary]']));
     // 新版卡片公司名在 span.boss-name；[class*=company] 会误匹配 company-location，不能用
-    const company = pick(c, ['.boss-name', '.company-name', '.company-info', '[class*=boss-name]', '[class*=company-name]', '.name']);
-    const area = pick(c, ['.job-area', '.job-location', '[class*=area]', '[class*=location]']);
-    const info = pick(c, ['.job-banner', '.job-card-footer', '.info-desc', '[class*=desc]', '[class*=tag]']);
+    const company = clean(pick(c, ['.boss-name', '.company-name', '.company-info', '[class*=boss-name]', '[class*=company-name]', '.name']));
+    const area = clean(pick(c, ['.job-area', '.job-location', '[class*=area]', '[class*=location]']));
+    const info = clean(pick(c, ['.job-banner', '.job-card-footer', '.info-desc', '[class*=desc]', '[class*=tag]']));
     if (title || company) out.push({position: title, salary, company, location: area, url: href, jd_summary: info});
   }
   return out;

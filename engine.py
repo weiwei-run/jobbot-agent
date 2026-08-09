@@ -452,6 +452,9 @@ def run_search(intent: str, city: str = "南京", page_size: int = 20,
                 j["location"] = (extract_location(v["location"])
                                  or extract_city(v["location"])
                                  or j.get("location", ""))
+            # 详情页明文薪资更可靠（BOSS 卡片薪资是图标字体私有区编码），有则覆盖
+            if v.get("salary"):
+                j["salary"] = v["salary"]
             j["verified"] = True
             verified_jobs.append(j)
         all_jobs = verified_jobs
