@@ -89,24 +89,33 @@ _BROWSER_VERIFY_SEM = threading.Semaphore(3)
 
 
 def verify_job(job: dict) -> dict:
-    """核实岗位详情：下线状态 + 学历/城市硬指标。返回 {offline, degree, location, salary, verified}。
+    """核实岗位详情：下线状态 + 学历/城市硬指标 + 完整 JD 文本。
+
+    返回 {offline, degree, location, salary, verified, jd_text}。
 
     - offline: 详情页出现「已下线/审核中」等失效特征
     - degree: 详情页要求的最低学历等级（0 = 不限/未写明）
     - location: 详情页正文片段（供 extract_city 判断城市）
     - salary: 详情页正文提取的薪资（8-13K / 6千-8千 / 100-200/天），取不到为空
     - verified: 详情页是否成功读取；False = 网络/风控/登录墙导致无法核实
+    - jd_text: 详情页完整正文（截断至 6000 字符，供 LLM 精排评分）
     """
     url = job.get("url") or ""
     platform = job.get("platform", "")
     if not url:
         # 无链接的岗位无法投递也无法核实，直接视为失效
-        return {"offline": True, "degree": 0, "location": "", "salary": "", "verified": True}
+        return {"offline": True, "degree": 0, "location": "", "salary": "",
+                "verified": True, "jd_text": ""}
     if platform == "51job":
         return _verify_wuyou(url)
     if platform in ("BOSS直聘", "实习僧"):
         return _verify_browser(url)
-    return {"offline": False, "degree": 0, "location": "", "salary": "", "verified": False}
+    return {"offline": False, "degree": 0, "location": "", "salary": "",
+            "verified": False, "jd_text": ""}
+
+
+# 精排评分复用同一详情读取（校验 + 完整 JD 一次完成）
+fetch_detail = verify_job
 
 
 def _verify_wuyou(url: str) -> dict:
@@ -117,13 +126,16 @@ def _verify_wuyou(url: str) -> dict:
         with urllib.request.urlopen(req, timeout=10) as r:
             html = r.read(300000).decode("utf-8", errors="ignore")
     except Exception:
-        return {"offline": False, "degree": 0, "location": "", "salary": "", "verified": False}
+        return {"offline": False, "degree": 0, "location": "", "salary": "",
+                "verified": False, "jd_text": ""}
     if any(m in html for m in OFFLINE_MARKERS):
-        return {"offline": True, "degree": 0, "location": "", "salary": "", "verified": True}
+        return {"offline": True, "degree": 0, "location": "", "salary": "",
+                "verified": True, "jd_text": ""}
     text = re.sub(r"<[^>]+>", " ", html)
     text = re.sub(r"\s+", " ", text).strip()
     return {"offline": False, "degree": jd_required_degree(text),
-            "location": text[:800], "salary": _extract_detail_salary(text), "verified": True}
+            "location": text[:800], "salary": _extract_detail_salary(text),
+            "verified": True, "jd_text": text[:6000]}
 
 
 def _verify_browser(url: str) -> dict:
@@ -132,14 +144,18 @@ def _verify_browser(url: str) -> dict:
         try:
             r = browser.open_page_text(url, timeout=15, markers=OFFLINE_MARKERS)
         except Exception:
-            return {"offline": False, "degree": 0, "location": "", "salary": "", "verified": False}
+            return {"offline": False, "degree": 0, "location": "", "salary": "",
+                    "verified": False, "jd_text": ""}
     if not r.get("ok"):
-        return {"offline": False, "degree": 0, "location": "", "salary": "", "verified": False}
+        return {"offline": False, "degree": 0, "location": "", "salary": "",
+                "verified": False, "jd_text": ""}
     text = r.get("text") or ""
     if any(m in text for m in OFFLINE_MARKERS):
-        return {"offline": True, "degree": 0, "location": "", "salary": "", "verified": True}
+        return {"offline": True, "degree": 0, "location": "", "salary": "",
+                "verified": True, "jd_text": ""}
     return {"offline": False, "degree": jd_required_degree(text),
-            "location": text[:800], "salary": _extract_detail_salary(text), "verified": True}
+            "location": text[:800], "salary": _extract_detail_salary(text),
+            "verified": True, "jd_text": text[:6000]}
 
 
 _DETAIL_SALARY_RE = re.compile(

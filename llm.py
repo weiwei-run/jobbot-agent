@@ -67,9 +67,10 @@ def chat(messages: list[dict], temperature: float = 0.3, max_tokens: int = 2000)
         raise RuntimeError(f"LLM 返回异常: {json.dumps(data, ensure_ascii=False)[:300]}")
 
 
-def chat_json(messages: list[dict], temperature: float = 0.2) -> dict:
+def chat_json(messages: list[dict], temperature: float = 0.2,
+              max_tokens: int = 2000) -> dict:
     """LLM 返回 JSON 对象（自动剥 ```json 包裹）。"""
-    text = chat(messages, temperature=temperature).strip()
+    text = chat(messages, temperature=temperature, max_tokens=max_tokens).strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     start, end = text.find("{"), text.rfind("}")

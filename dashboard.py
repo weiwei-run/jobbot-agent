@@ -65,6 +65,11 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .badge-hr_replied{background:#0a1f2a;color:var(--accent)}.badge-interviewing,.badge-interview_scheduled{background:#0a2a1a;color:var(--good)}
 .badge-offered{background:#0a2a1a;color:var(--good)}.badge-rejected{background:#2a0a0a;color:var(--err)}
 .stars{color:var(--warn)}
+.score-badge{background:var(--accent);color:#fff;border-radius:10px;padding:2px 8px;font-size:12px;font-weight:700;white-space:nowrap}
+.chips{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;margin-top:4px}
+.chip{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1px 6px;font-size:11px;color:#8b949e}
+.ev-box,.gap-box{margin-top:6px;font-size:12px;line-height:1.7}
+.ev{color:var(--good)}.gap{color:var(--warn)}
 button,.btn{background:var(--accent);color:#fff;border:0;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600}
 button:hover{opacity:.85}button:disabled{opacity:.4;cursor:not-allowed}
 .btn-sm{background:var(--border);padding:4px 12px;font-size:12px}.btn-sm:hover{background:#484f58}
@@ -168,6 +173,7 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
     <button onclick=runSearch()>⚡ 开始搜索</button>
     <span id=search-status class="search-float hidden"></span>
   </h3>
+  <div id=profile-guide class="hidden" style="background:var(--bg);border:1px dashed var(--warn);border-radius:8px;padding:12px;margin-bottom:12px"></div>
   <div id=search-warnings></div>
   <div id=kw-box class=row style="margin-top:0"></div>
   <div id=job-list></div>
@@ -229,12 +235,13 @@ let saveTimer=null;
 let _resumeParse='';
 let jobPage=1;
 const loginPollers={};
-const JOBS_PER_PAGE=5;
+const JOBS_PER_PAGE=10;
 let platformFilter='all',statusFilter='all';
 let sortKey='applied_at',sortDir='desc';
 let expanded=null;
+let profileMissing=[];
 
-async function loadAll(){await Promise.all([loadData(),loadConfig(),loadLLM(),loadSettings()]);render();checkEnv();}
+async function loadAll(){await Promise.all([loadData(),loadConfig(),loadLLM(),loadSettings(),loadProfile()]);render();checkEnv();}
 async function loadData(){const r=await fetch('/api/data');data=await r.json();}
 async function loadConfig(){
   try{const r=await fetch('/api/config');config=await r.json();}catch(e){}
@@ -267,6 +274,48 @@ async function loadSettings(){
   document.getElementById('set-ftoken').value=f.app_token||'';
   document.getElementById('set-ftable').value=f.table_id||'';
   if(f.has_secret)document.getElementById('set-fsecret').placeholder='已保存 (留空不变)';
+}
+async function loadProfile(){
+  try{
+    const r=await fetch('/api/profile');const d=await r.json();
+    if(d.ok)renderProfileGuide(d);
+  }catch(e){}
+}
+function renderProfileGuide(d){
+  profileMissing=d.missing_fields||[];
+  const box=document.getElementById('profile-guide');
+  if(!profileMissing.length){box.innerHTML='';box.classList.add('hidden');return;}
+  const labelMap={education:'最高学历',graduate_year:'毕业届别',expected_salary:'薪资期望（如 3000-6000）',job_type:'招聘类型'};
+  const inputs={
+    education:'<select id=pg-education><option value="">请选择</option>'+['高中','中专','大专','本科','硕士','博士'].map(x=>`<option>${x}</option>`).join('')+'</select>',
+    graduate_year:'<input type=text id=pg-graduate_year placeholder="如 2027">',
+    expected_salary:'<input type=text id=pg-expected_salary placeholder="如 3000-6000">',
+    job_type:'<select id=pg-job_type><option value="">请选择</option>'+['实习','校招','社招'].map(x=>`<option>${x}</option>`).join('')+'</select>'
+  };
+  box.innerHTML='<div style="margin-bottom:6px"><strong>🪪 完善求职画像</strong>（补全后匹配评分更准）</div>'+
+    profileMissing.map(k=>`<div style="margin:6px 0;max-width:280px"><label style="margin-top:0">${labelMap[k]||k}</label>${inputs[k]||''}</div>`).join('')+
+    '<div class=row style="margin-top:10px"><button class="btn-sm btn-good" onclick="saveProfileGuide()">保存补全</button>'+
+    '<button class="btn-sm" onclick="dismissProfileGuide()">暂不补全</button></div>';
+  box.classList.remove('hidden');
+}
+async function saveProfileGuide(){
+  const fields={
+    education:document.getElementById('pg-education')?.value,
+    graduate_year:document.getElementById('pg-graduate_year')?.value,
+    expected_salary:document.getElementById('pg-expected_salary')?.value,
+    job_type:document.getElementById('pg-job_type')?.value
+  };
+  let ok=true;
+  for(const [k,v] of Object.entries(fields)){
+    if(v===undefined||v==='')continue;
+    const r=await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({field:k,value:v})});
+    const d=await r.json();
+    if(!d.ok){toast('❌ '+d.error);ok=false;break;}
+  }
+  if(ok){toast('✅ 画像已补全');loadProfile();}
+}
+function dismissProfileGuide(){
+  document.getElementById('profile-guide').classList.add('hidden');
 }
 function showApp(){
   ['env-section','search-section','stats-section','table-section','settings-section'].forEach(id=>{
@@ -395,7 +444,11 @@ async function saveConfig(){
              city:document.getElementById('cfg-city').value.trim()||'南京'};
   const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
   const d=await r.json();
-  if(d.ok){showApp();toast('✅ 意向已保存');}
+  if(d.ok){
+    showApp();toast('✅ 意向已保存');
+    if(d.missing_fields&&d.missing_fields.length)renderProfileGuide(d);
+    else document.getElementById('profile-guide').classList.add('hidden');
+  }
   else toast('❌ '+d.error);
 }
 async function checkEnv(){
@@ -485,7 +538,7 @@ async function runSearch(){
         const extra=[];
         if(s.result&&s.result.filtered)extra.push('已过滤 '+s.result.filtered+' 个不匹配/未核实岗位');
         if(s.result&&s.result.offline)extra.push('已过滤 '+s.result.offline+' 个已下线岗位');
-        st.textContent=`共找到 ${jobs.length} 个岗位${extra.length?'（'+extra.join('、')+'）':''}，点击「投递」自动投递`;
+        st.textContent=`共找到 ${jobs.length} 个匹配岗位${extra.length?'（'+extra.join('、')+'）':''}，点击「打开详情投递」自行查看并投递`;
         setTimeout(()=>st.hidden=true,10000);
       }catch(e){clearInterval(timer);btn.disabled=false;toast('❌ 搜索状态获取失败');st.textContent='❌ 搜索状态获取失败';setTimeout(()=>st.hidden=true,8000);}
     },1000);
@@ -523,23 +576,34 @@ function renderJobs(jobs, summary){
   const pageJobs=jobs.slice(start,start+JOBS_PER_PAGE);
   el.innerHTML=pageJobs.map((j,idx)=>{
     const i=start+idx;  // 全局下标，投递/记录用
+    const breakdown=j.score_breakdown||{};
+    const chipLabels={hard_skills:'硬技能',project_intern:'项目',edu_major:'学历专业',cert_lang:'证书',city_industry:'城市方向'};
+    const chips=Object.keys(breakdown).filter(k=>breakdown[k]!==undefined)
+      .map(k=>`<span class=chip>${chipLabels[k]||k} ${breakdown[k]}</span>`).join('');
+    const evs=(j.evidence||[]).slice(0,3).map(e=>
+      `<div class=ev>✅ ${esc(e.item||e.type)}${e.confidence>=1?'（命中）':e.confidence>=0.5?'（部分）':'（弱）'}：${esc((e.evidence||'').slice(0,60))}</div>`).join('');
+    const gaps=(j.gaps||[]).slice(0,3).map(g=>`<div class=gap>❌ ${esc(g)}</div>`).join('');
     return `
   <div class=job-card id="jc-${i}">
     <div class=top>
       <div><span class=pos>${esc(j.position)}</span> ${j.risk==='suspicious'?'<span class=risk-tag>⚠ 可疑</span>':''}<br>
       <span class=comp>${esc(j.company)}</span></div>
-      <div><span class=stars>${'⭐'.repeat(j.score||0)}</span>
-        ${j.reason?`<div class=reason>${esc(j.reason)}</div>`:''}</div>
+      <div style="text-align:right">
+        <span class=score-badge>${j.score}分 · ${esc(j.grade||'')}</span> ${'⭐'.repeat(j.star||0)}
+        ${j.score_failed?'<div class=gap>⚠ 评分失败，按备选展示</div>':''}
+        ${chips?`<div class=chips>${chips}</div>`:''}
+      </div>
     </div>
     <div class=meta>${j.platform?('🏢 '+esc(j.platform)+' · '):''}💰 ${esc(j.salary||'—')} · 📍 ${esc(j.location||'—')} · 🎓 ${esc(j.degree||'—')} · ⏱ ${esc(j.work_year||'—')}</div>
+    ${evs?`<div class=ev-box>${evs}</div>`:''}
+    ${gaps?`<div class=gap-box>${gaps}</div>`:''}
+    ${j.reason?`<div class=reason>💡 ${esc(j.reason)}</div>`:''}
     <div class=jd>${esc((j.jd_summary||'').slice(0,120))}</div>
     <div class=act>
-      <button class="btn-sm btn-good" onclick=doApply(${i})>🚀 投递</button>
+      ${j.url?`<a href="${esc(j.url)}" target=_blank class="btn-sm btn-good" style="display:inline-block;padding:4px 12px">🔗 打开详情投递</a>`:''}
       <button class=btn-sm onclick=addJob(${i})>📝 加入记录</button>
-      ${j.url?`<a href="${esc(j.url)}" target=_blank class=btn-sm style="display:inline-block;padding:4px 12px">🔗 详情</a>`:''}
       ${j.risk==='suspicious'?`<span style="font-size:12px;color:var(--err)">可疑词: ${esc((j.risk_hits||[]).join('、'))}</span>`:''}
     </div>
-    <div id="apply-result-${i}"></div>
   </div>`;
   }).join('');
   renderPager(jobs.length);
@@ -550,7 +614,7 @@ function renderPager(total){
   p.style.display='block';
   p.innerHTML=`<button class=btn-sm onclick=prevPage() ${jobPage<=1?'disabled':''}>← 上一页</button>`+
     `<span style="margin:0 12px;color:#8b949e">第 ${jobPage} / ${pages} 页 · 共 ${total} 个岗位</span>`+
-    `<button class=btn-sm onclick=nextPage() ${jobPage>=pages?'disabled':''}>下一页 →</button>`;
+    `<button class=btn-sm onclick=nextPage() ${jobPage>=pages?'disabled':''}>换一批 →</button>`;
 }
 function prevPage(){
   if(jobPage>1){jobPage--;renderJobs(window._lastJobs||[]);}
@@ -558,31 +622,6 @@ function prevPage(){
 function nextPage(){
   const total=(window._lastJobs||[]).length;
   if(jobPage*JOBS_PER_PAGE<total){jobPage++;renderJobs(window._lastJobs||[]);}
-}
-async function doApply(i){
-  const j=window._lastJobs[i];
-  const box=document.getElementById('apply-result-'+i);
-  box.className='apply-result';box.textContent='⏳ 正在自动投递（浏览器操作中，约20~60秒）…';
-  const btn=box.closest('.job-card').querySelector('.act .btn-good');
-  btn.disabled=true;
-  try{
-    const r=await fetch('/api/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(j)});
-    const d=await r.json();
-    if(d.ok){
-      box.className='apply-result ok';box.textContent='✅ '+d.message;
-      toast('✅ 投递成功');loadData();
-    }else{
-      box.className='apply-result err';
-      if(d.need_login){
-        box.textContent='❌ '+d.message;
-        showLoginRequired([platformKey(j.platform)]);
-      }else{
-        box.textContent='❌ '+d.message;
-      }
-      toast('❌ 投递失败');
-    }
-  }catch(e){box.className='apply-result err';box.textContent='❌ 投递异常';}
-  btn.disabled=false;
 }
 async function addJob(i){
   const j=window._lastJobs[i];
@@ -653,11 +692,13 @@ function render(){
   const statusFlow={discovered:['applied'],applied:['hr_replied','interview_scheduled','rejected'],hr_replied:['interview_scheduled','rejected'],interviewing:['offered','rejected'],interview_scheduled:['offered','rejected'],offered:[],rejected:[]};
   const flowLabel={applied:'已投递',hr_replied:'已回复',interview_scheduled:'约面试',interviewing:'面试中',offered:'Offer',rejected:'拒绝'};
   document.getElementById('table-body').innerHTML=rows.map((a,i)=>{
-    const s=a.status||'discovered', stars='⭐'.repeat(a.score||0)||'—';
+    const s=a.status||'discovered';
+    const sc=a.score||0;
+    const stars=sc>5?`${sc}分`:('<span class=stars>'+'⭐'.repeat(sc)+'</span>'||'—');
     const btns=(statusFlow[s]||[]).map(ns=>`<button class="btn-sm ${ns==='rejected'?'btn-err':ns==='offered'?'btn-good':''}" onclick="event.stopPropagation();setStatus('${esc(a.url)}','${ns}')">${flowLabel[ns]}</button>`).join('');
     return `<tr class=main-row onclick="toggleDetail(${i},this)" data-idx=${i}>
       <td>${esc(a.company)||'—'}</td><td>${a.url?`<a href="${esc(a.url)}" target=_blank onclick="event.stopPropagation()">${esc(a.position)||'—'}</a>`:(esc(a.position)||'—')}</td>
-      <td>${esc(a.platform)||'—'}</td><td class=stars>${stars}</td>
+      <td>${esc(a.platform)||'—'}</td><td>${stars}</td>
       <td><span class="badge ${badge[s]||'badge-discovered'}">${statusLabel[s]||s}</span></td>
       <td><div class=status-btns>${btns}</div></td>
       <td>${(a.applied_at||'').slice(0,10)}</td></tr>`+
@@ -671,6 +712,9 @@ function detailHTML(a){
   if(a.location)h+=`<p><strong>📍 地点：</strong>${esc(a.location)}</p>`;
   if(a.hr_name)h+=`<p><strong>👤 联系人：</strong>${esc(a.hr_name)}</p>`;
   if(a.reason)h+=`<p><strong>💡 评分理由：</strong>${esc(a.reason)}</p>`;
+  if(a.score_breakdown)h+=`<p><strong>📊 分项分：</strong>${esc(JSON.stringify(a.score_breakdown))}</p>`;
+  if(a.evidence&&a.evidence.length)h+=`<p><strong>✅ 命中证据：</strong>${a.evidence.map(e=>esc(e.item+(e.evidence?'（'+e.evidence.slice(0,50)+'）':''))).join('；')}</p>`;
+  if(a.gaps&&a.gaps.length)h+=`<p><strong>❌ 缺口：</strong>${esc(a.gaps.join('；'))}</p>`;
   if(a.notes)h+=`<p><strong>📌 备注：</strong>${esc(a.notes)}</p>`;
   return h||'<span style=color:#8b949e>暂无详细信息</span>';
 }
@@ -736,6 +780,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"spreadsheet": spreadsheet._public(spreadsheet.load_settings())})
         elif self.path == '/api/env':
             self._json(self._env_status())
+        elif self.path == '/api/profile':
+            self._handle_profile()
         elif self.path == '/api/search/status':
             self._json(self._search_status())
         else:
@@ -760,6 +806,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_settings()
         elif self.path == '/api/settings/test':
             self._handle_settings_test()
+        elif self.path == '/api/profile':
+            self._handle_profile()
         elif self.path == '/api/env/login':
             self._handle_env_login()
         elif self.path == '/api/env/check':
@@ -796,7 +844,60 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cfg = self._body_json()
             CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
                                    encoding="utf-8")
-            self._json({"ok": True})
+            enriched = engine.enrich_profile(cfg.get("intent", ""),
+                                             cfg.get("resume_parse", ""),
+                                             cfg.get("city", "南京"))
+            self._json({"ok": True,
+                        "missing_fields": enriched["missing_fields"],
+                        "extract_failed": enriched["extract_failed"]})
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)})
+
+    def _handle_profile(self):
+        """画像：GET 返回公开字段与缺失字段；POST 补全/修正单个字段。"""
+        try:
+            profile = engine.load_user_profile()
+            if self.command == "POST":
+                body = self._body_json()
+                field = body.get("field", "")
+                value = body.get("value")
+                if field not in ("education", "graduate_year", "major", "skills",
+                                 "certificates", "expected_cities", "expected_jobs",
+                                 "expected_salary", "job_type"):
+                    self._json({"ok": False, "error": "不支持的画像字段"})
+                    return
+                if field == "education" and value not in ("高中", "中专", "大专",
+                                                          "本科", "硕士", "博士"):
+                    self._json({"ok": False, "error": "学历取值不合法"})
+                    return
+                if field == "job_type" and value not in ("实习", "校招", "社招"):
+                    self._json({"ok": False, "error": "招聘类型取值不合法"})
+                    return
+                if field == "graduate_year":
+                    try:
+                        value = int(value)
+                    except (TypeError, ValueError):
+                        self._json({"ok": False, "error": "毕业届别需为年份数字"})
+                        return
+                if field == "expected_salary":
+                    if isinstance(value, str):
+                        parts = re.split(r"[-~至,，]", value.strip())
+                        if len(parts) == 2:
+                            try:
+                                value = [int(parts[0]), int(parts[1])]
+                            except ValueError:
+                                value = None
+                    if not (isinstance(value, list) and len(value) == 2):
+                        self._json({"ok": False, "error": "薪资期望格式如 3000-6000"})
+                        return
+                profile[field] = value
+                engine.save_profile(profile)
+            missing = engine.profile_missing_fields(profile)
+            public = {k: profile.get(k) for k in (
+                "education", "graduate_year", "major", "skills", "certificates",
+                "expected_cities", "expected_jobs", "expected_salary", "job_type")}
+            self._json({"ok": True, "profile": public, "missing_fields": missing,
+                        "extract_failed": bool(profile.get("_extract_failed"))})
         except Exception as e:
             self._json({"ok": False, "error": str(e)})
 

@@ -81,3 +81,18 @@
 - **处理**：结束占用 9377 端口的 node 进程 → 冷启动 server.js + camoufox 引擎（登录 cookie 存于 profile，登录态保留）
 - **检测结果**：BOSS直聘未拦截。搜索页 `zhipin.com/web/geek/jobs?query=PLC&city=101190100` 与详情页 `/job_detail/7a3e18ec8997214c0nFy09i9EFpT.html` 均正常加载，无安全验证/验证码/登录墙/IP 黑名单标记，账号（肖豪威）已登录
 - **注意**：引擎冷启动后首次创建标签页较慢（本次约 90s/重试 3 次成功），遇到 `tab create timed out` 时重试即可
+
+---
+
+## 2026-08-10 #0 — 匹配评分机制重构（job-match-scoring 变更，实现阶段）
+
+- **背景**：产品定位确认为"AI 完成 300→10 精细初筛"，旧评分（LLM 对卡片 200 字打 1~5 星）不可解释、不稳定、无法校准
+- **方案**：调研 ATS/北森/job-copilot 的"字段化+权重+证据链"共识后确定——LLM 只做结构化提取与语义判断，分数由规则按校招权重表（硬技能30/项目实习25/学历届别专业20/证书语言10/城市行业意向15）计算 0~100 + 档位 + 分项 + 证据链
+- **实现**：
+  - `engine.py`：画像结构化提取（`extract_profile_fields`/`enrich_profile`，缺关键字段引导补全）；`analyze_job_match` + `compute_match_scores` 精排；`run_search` 改两段式（卡片粗筛 Top30 → 详情页校验+取完整 JD 一次完成 → 精排 → Top10 分页）
+  - `platforms.py`：`verify_job` 扩展为 `fetch_detail`（新增 `jd_text` 完整 JD 返回）
+  - `dashboard.py`：结果卡片展示总分/档位/分项/证据，每页 10 条「换一批」翻页，移除自动投递按钮改为「打开详情投递」链接 + 加入记录，新增画像补全引导 UI 与 `/api/profile`
+  - `llm.py`：`chat_json` 支持 max_tokens；分析/提取 prompt 加"只返回 JSON 不要解释"（修复推理模型 reasoning 占满 token 导致 content 为空）
+  - 新增 `scripts/selftest_scoring.py`（8 项自测全过：提取/缺失字段/降级/档位边界/同义匹配/证据链/管道级过滤）
+- **验证**：`py_compile` 通过、`openspec validate` 7 项全过；真实画像提取正常（学历/专业/8 项技能/2 证书）；51job 真实搜索首次跑通（11 条），后续被临时限流返回 0，三平台实测待 Dashboard 验证
+- **注意**：深色模式推理模型（deepseek-v4-flash）对复杂 JSON prompt 可能把输出预算全耗在 reasoning 上，需显式"不要解释"并调大 max_tokens；51job 高频搜索会触发临时限流
