@@ -10,9 +10,9 @@ context: |
   Dashboard 为单文件 http.server 实现（dashboard.py，端口 9379，纯 stdlib）。
   核心文件：start.py（一键启动）、dashboard.py（看板+API）、engine.py（搜索/评分/记录）、
   platforms.py（三平台搜索与投递）、browser.py（Camofox 客户端）、llm.py（OpenAI 兼容客户端）、
-  spreadsheet.py（在线表格同步）、pdftext.py（零依赖 PDF 提取）。
+  pdftext.py（零依赖 PDF 提取）。
   数据本地化：data/applications.json 为唯一数据源，config/ 下为本地配置（llm.json、
-  user_profile.json、platforms.yml、settings.json），密钥/简历不上传。
+  user_profile.json、platforms.yml），密钥/简历不上传。
   平台：BOSS直聘、前程无忧(51job)、实习僧。51job 搜索走纯 HTTP API（WAF 拦截时降级
   Chrome headless），BOSS/实习僧搜索与三平台自动投递走 Camofox。
   核心原则：登录门禁（绝不自动登录/填验证码/绕过）、投递后必须验证成功、诚实反馈、

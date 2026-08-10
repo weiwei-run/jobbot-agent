@@ -50,3 +50,11 @@
 - [x] 7.1 分页按钮「换一批」改为「下一页」（功能不变）
 - [x] 7.2 搜索完成后新增黄色提示行「更换关键词示例：…」展示推荐关键词（与警告同字号同色）
 - [x] 7.3 推荐岗位支持按平台筛选（全部平台/BOSS直聘/51job/实习僧），筛选后分页与计数同步
+
+## 8. 移除在线表格同步（定位调整）
+
+- [x] 8.1 删除 `spreadsheet.py`，`engine.py` 移除 `_sync_after_change` 钩子（新增/更新记录不再触发外部推送）
+- [x] 8.2 `dashboard.py` 移除设置界面、`loadSettings`/`saveSettings`/`testSettings`、`/api/settings` 与 `/api/settings/test` 接口
+- [x] 8.3 「加入记录」默认状态改为 `applied`（先投递、后记录），提示文案同步为「已加入记录（已投递）」
+- [x] 8.4 清理文档：`README.md` / `PRODUCT.md` / `start.py` / `TODO.md` / `openspec/config.yaml` 移除在线同步说明
+- [x] 8.5 新增 `online-sync` REMOVED delta 并更新 proposal/design；`openspec validate` 通过

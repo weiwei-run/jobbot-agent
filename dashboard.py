@@ -2,7 +2,7 @@
 """JobBot Dashboard — python dashboard.py → http://localhost:9379
 
 单文件本地看板（纯 stdlib）：LLM 配置 → 简历/意向 → 三平台搜索评分 →
-一键自动投递 → 投递记录管理 → 在线表格同步。
+岗位详情投递 → 投递记录管理。
 """
 import http.server
 import json
@@ -18,7 +18,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import engine  # noqa: E402
-import spreadsheet  # noqa: E402
 from llm import chat_json, load_config, save_config, test_connection  # noqa: E402
 
 PORT = 9379
@@ -117,7 +116,7 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
 </style></head>
 <body>
 <h1>🤖 JobBot Agent</h1>
-<p class=sub>AI求职助手 · 本地运行 · 配置一次 LLM Key 即用 · 三大平台搜索/投递 · 在线表格同步</p>
+<p class=sub>AI求职助手 · 本地运行 · 配置一次 LLM Key 即用 · 三大平台搜索 · AI 匹配评分</p>
 <div id=toast style=opacity:0></div>
 <div id=search-overlay class=hidden>
   <div class=box>
@@ -215,33 +214,6 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
   <p id=empty-msg style="text-align:center;color:#8b949e;padding:40px;display:none">暂无记录。点击上方「开始搜索」找岗位。</p>
 </section>
 
-<section id=settings-section class=hidden>
-  <h3>📤 在线表格同步 <button class="btn-sm" onclick=saveSettings()>💾 保存</button> <button class="btn-sm" onclick=testSettings()>🔌 测试</button> <span id=settings-status style="font-size:12px;color:var(--good)"></span></h3>
-  <div class=grid2>
-    <div>
-      <label>同步方式</label>
-      <select id=set-type>
-        <option value=none>关闭</option>
-        <option value=webhook>Webhook（通用，对接 Zapier/Make/自建）</option>
-        <option value=feishu>飞书多维表格</option>
-      </select>
-      <label>Webhook 地址</label>
-      <input type=text id=set-webhook placeholder="https://example.com/hook">
-    </div>
-    <div>
-      <label>飞书 App ID</label>
-      <input type=text id=set-fapp placeholder="cli_xxx">
-      <label>飞书 App Secret</label>
-      <input type=password id=set-fsecret placeholder="已保存则留空">
-      <label>多维表格 App Token</label>
-      <input type=text id=set-ftoken placeholder="bascnxxx">
-      <label>数据表 Table ID</label>
-      <input type=text id=set-ftable placeholder="tblxxx">
-    </div>
-  </div>
-  <p style="font-size:12px;color:#8b949e;margin-top:8px">开启后，每次新增/更新投递记录会自动同步。飞书申请：open.feishu.cn 创建自建应用 → 开通多维表格权限 → 复制表格 app_token 与 table_id。</p>
-</section>
-
 <script>
 let data={applications:[],stats:{}};
 let llmCfg={};
@@ -259,7 +231,7 @@ let expanded=null;
 let profileMissing=[];
 let jobPlatformFilter='all';
 
-async function loadAll(){await Promise.all([loadData(),loadConfig(),loadLLM(),loadSettings(),loadProfile()]);render();checkEnv();}
+async function loadAll(){await Promise.all([loadData(),loadConfig(),loadLLM(),loadProfile()]);render();checkEnv();}
 async function loadData(){const r=await fetch('/api/data');data=await r.json();}
 async function loadConfig(){
   try{const r=await fetch('/api/config');config=await r.json();}catch(e){}
@@ -281,17 +253,6 @@ async function loadLLM(){
     document.getElementById('llm-model').value=llmCfg.model||'';
     if(llmCfg.has_key)document.getElementById('llm-key').placeholder='已保存 (sk-****)';
   }catch(e){}
-}
-async function loadSettings(){
-  try{const r=await fetch('/api/settings');settings=await r.json();}catch(e){}
-  const s=settings.spreadsheet||{};
-  document.getElementById('set-type').value=s.type||'none';
-  document.getElementById('set-webhook').value=s.webhook_url||'';
-  const f=s.feishu||{};
-  document.getElementById('set-fapp').value=f.app_id||'';
-  document.getElementById('set-ftoken').value=f.app_token||'';
-  document.getElementById('set-ftable').value=f.table_id||'';
-  if(f.has_secret)document.getElementById('set-fsecret').placeholder='已保存 (留空不变)';
 }
 async function loadProfile(){
   try{
@@ -336,7 +297,7 @@ function dismissProfileGuide(){
   document.getElementById('profile-guide').classList.add('hidden');
 }
 function showApp(){
-  ['env-section','search-section','stats-section','table-section','settings-section'].forEach(id=>{
+  ['env-section','search-section','stats-section','table-section'].forEach(id=>{
     document.getElementById(id).classList.remove('hidden');
   });
 }
@@ -795,31 +756,6 @@ function toggleDetail(idx,row){
 }
 function setPlatformFilter(f){platformFilter=f;render();}
 function setStatusFilter(f){statusFilter=f;render();}
-async function saveSettings(){
-  const payload={
-    spreadsheet:{
-      enabled:document.getElementById('set-type').value!=='none',
-      type:document.getElementById('set-type').value,
-      webhook_url:document.getElementById('set-webhook').value.trim(),
-      feishu:{
-        app_id:document.getElementById('set-fapp').value.trim(),
-        app_secret:document.getElementById('set-fsecret').value.trim(),
-        app_token:document.getElementById('set-ftoken').value.trim(),
-        table_id:document.getElementById('set-ftable').value.trim(),
-      }
-    }
-  };
-  const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const d=await r.json();
-  if(d.ok){toast('✅ 设置已保存');loadSettings();}
-  else toast('❌ '+d.error);
-}
-async function testSettings(){
-  const st=document.getElementById('settings-status');st.textContent='测试中…';
-  const r=await fetch('/api/settings/test',{method:'POST'});
-  const d=await r.json();
-  st.textContent=d.ok?('✅ '+d.message):('❌ '+d.message);
-}
 function toast(m){
   const t=document.getElementById('toast');t.textContent=m;t.style.opacity='1';
   setTimeout(()=>t.style.opacity='0',3000);
@@ -844,8 +780,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cfg = load_config()
             self._json({"base_url": cfg["base_url"], "model": cfg["model"],
                         "has_key": bool(cfg["api_key"])})
-        elif self.path == '/api/settings':
-            self._json({"spreadsheet": spreadsheet._public(spreadsheet.load_settings())})
         elif self.path == '/api/env':
             self._json(self._env_status())
         elif self.path == '/api/profile':
@@ -870,10 +804,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_apply()
         elif self.path == '/api/status':
             self._handle_status()
-        elif self.path == '/api/settings':
-            self._handle_settings()
-        elif self.path == '/api/settings/test':
-            self._handle_settings_test()
         elif self.path == '/api/profile':
             self._handle_profile()
         elif self.path == '/api/env/login':
@@ -1017,8 +947,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = self._body_json()
             manual = body.pop("_manual", False)
             if manual:
-                rec = engine.add_application(body)
-                self._json({"ok": True, "message": "已加入记录", "record": rec})
+                # 新流程：用户先自行投递，再点「加入记录」→ 默认状态直接记为已投递
+                rec = engine.add_application(body, status="applied")
+                self._json({"ok": True, "message": "已加入记录（已投递）", "record": rec})
             else:
                 result = engine.apply_job(body)
                 if result.get("ok"):
@@ -1044,25 +975,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(engine.update_status(url, status))
         except Exception as e:
             self._json({"ok": False, "error": str(e)[:200]})
-
-    # ---- Spreadsheet settings ----
-    def _handle_settings(self):
-        try:
-            payload = self._body_json()
-            existing = spreadsheet.load_settings()
-            incoming = payload.get("spreadsheet", {})
-            incoming.setdefault("feishu", {})
-            # 密钥留空 = 保留原值
-            if not incoming["feishu"].get("app_secret"):
-                incoming["feishu"]["app_secret"] = existing["spreadsheet"]["feishu"].get("app_secret", "")
-            existing["spreadsheet"] = incoming
-            spreadsheet.save_settings(existing)
-            self._json({"ok": True})
-        except Exception as e:
-            self._json({"ok": False, "error": str(e)})
-
-    def _handle_settings_test(self):
-        self._json(spreadsheet.test_sync())
 
     # ---- Environment ----
     def _env_status(self):

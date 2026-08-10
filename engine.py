@@ -5,7 +5,7 @@
 - 51job：纯 HTTP API 搜索，被 WAF 拦截自动降级 Chrome headless
 - BOSS直聘 / 实习僧：Camofox 浏览器驱动，首次需手动登录
 - 自动投递：Camofox 点击 + 成功后验证，失败返回明确原因
-- 记录：data/applications.json（唯一数据源）+ 在线表格同步
+- 记录：data/applications.json（唯一数据源，本地看板跟进）
 """
 import json
 import re
@@ -890,7 +890,6 @@ def add_application(job: dict, status: str = "discovered") -> dict:
     db["applications"] = apps
     recompute_stats(db)
     save_db(db)
-    _sync_after_change()
     return rec
 
 
@@ -919,7 +918,6 @@ def apply_job(job: dict) -> dict:
                     break
             recompute_stats(db)
             save_db(db)
-            _sync_after_change()
             result["record"] = find_record(job.get("url", ""))
     return result
 
@@ -932,18 +930,8 @@ def update_status(url_or_id: str, status: str) -> dict:
             a["last_update"] = datetime.now().isoformat(timespec="seconds")
             recompute_stats(db)
             save_db(db)
-            _sync_after_change()
             return {"ok": True, "record": a}
     return {"ok": False, "error": "未找到该记录"}
-
-
-def _sync_after_change():
-    import spreadsheet
-    settings = spreadsheet.load_settings()
-    if not settings["spreadsheet"].get("enabled"):
-        return
-    db = load_db()
-    spreadsheet.sync_async(db.get("applications", []))
 
 
 if __name__ == "__main__":

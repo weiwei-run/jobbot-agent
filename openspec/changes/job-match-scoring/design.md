@@ -70,6 +70,10 @@ SCORE_WEIGHTS_SOCIAL = None  # 预留
 
 `data/applications.json` 的 `score` 字段语义变为 0-100；旧记录中 ≤5 的值按星级兼容显示（不迁移改写，避免破坏历史数据）。新增评分详情字段（`score_breakdown`、`evidence`）仅随搜索结果返回，默认不写入投递记录（投递时可选快照）。
 
+### 7. 在线表格同步移除
+
+按产品定位调整，整体删除在线同步：`spreadsheet.py` 删除、`engine` 记录写入后不再触发外部推送、`dashboard` 移除设置界面与 `/api/settings` 接口、`online-sync` 能力域从规格中 REMOVED。投递记录与状态流转保留在本地看板（含 CSV 导出），「加入记录」默认状态改为 `applied` 以对齐"先投递、后记录"的新流程。`config/settings.json` 遗留文件不主动删除（已不入库），对功能无影响。
+
 ## Risks / Trade-offs
 
 - 每轮 30 条详情页读取耗时与风控风险上升（预计单轮搜索从 1~2 分钟增至 3~8 分钟）→ 沿用现有浏览器并发 tab ≤3 与失败重试；读取失败直接过滤，不拖慢流程；30 为可调上限。
