@@ -192,6 +192,7 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
   <div id=profile-guide class="hidden" style="background:var(--bg);border:1px dashed var(--warn);border-radius:8px;padding:12px;margin-bottom:12px"></div>
   <div id=search-warnings></div>
   <div id=kw-box class=row style="margin-top:0"></div>
+  <div class=filters id=job-platform-filters style="margin-bottom:8px"></div>
   <div id=job-list></div>
   <div id=pager style="display:none;text-align:center;margin:14px 0"></div>
 </section>
@@ -256,6 +257,7 @@ let platformFilter='all',statusFilter='all';
 let sortKey='applied_at',sortDir='desc';
 let expanded=null;
 let profileMissing=[];
+let jobPlatformFilter='all';
 
 async function loadAll(){await Promise.all([loadData(),loadConfig(),loadLLM(),loadSettings(),loadProfile()]);render();checkEnv();}
 async function loadData(){const r=await fetch('/api/data');data=await r.json();}
@@ -588,6 +590,13 @@ async function runSearch(){
 function renderSearchResult(d){
   document.getElementById('kw-box').innerHTML=(d.keywords||[]).map(k=>`<span class=kw>${esc(k)}</span>`).join('')||'';
   document.getElementById('search-warnings').innerHTML=(d.warnings||[]).map(w=>`<div class=warn-line>⚠ ${esc(w)}</div>`).join('');
+  const kws=(d.keywords||[]).filter(Boolean);
+  if(kws.length){
+    const line=document.createElement('div');
+    line.className='warn-line';
+    line.textContent='更换关键词示例：'+kws.join('，');
+    document.getElementById('search-warnings').appendChild(line);
+  }
   if(d.login_required&&d.login_required.length){
     showLoginRequired(d.login_required);
   }else{
@@ -595,26 +604,44 @@ function renderSearchResult(d){
   }
   checkEnv();
   jobPage=1;
+  jobPlatformFilter='all';
   renderJobs(d.jobs||[], d);
   showApp();
 }
+function renderJobPlatformFilters(jobs){
+  const el=document.getElementById('job-platform-filters');
+  const platforms=[...new Set((jobs||[]).map(j=>j.platform).filter(Boolean))];
+  if(!platforms.length){el.innerHTML='';return;}
+  el.innerHTML='<button class="'+(jobPlatformFilter==='all'?'active':'')+'" onclick="setJobPlatformFilter(\'all\')">全部平台</button>'+
+    platforms.map(p=>`<button class="${jobPlatformFilter===p?'active':''}" onclick="setJobPlatformFilter('${esc(p)}')">${esc(p)}</button>`).join('');
+}
+function setJobPlatformFilter(f){
+  jobPlatformFilter=f;
+  jobPage=1;
+  renderJobs(window._lastJobs||[], window._lastSummary||{});
+}
 function renderJobs(jobs, summary){
   window._lastJobs=jobs||[];
+  window._lastSummary=summary||{};
   const el=document.getElementById('job-list');
-  if(!jobs.length){
+  renderJobPlatformFilters(jobs);
+  const visible=jobPlatformFilter==='all'?(jobs||[]):(jobs||[]).filter(j=>j.platform===jobPlatformFilter);
+  if(!visible.length){
     const parts=[];
     if(summary&&summary.filtered)parts.push('过滤掉 '+summary.filtered+' 个不匹配/未核实岗位');
     if(summary&&summary.offline)parts.push('过滤掉 '+summary.offline+' 个已下线岗位');
-    el.innerHTML='<p style="color:#8b949e;line-height:2">😕 没有找到符合条件的岗位'+
-      (parts.length?'（'+parts.join('、')+'）':'')+'。<br>'+
-      '建议：完善「意向描述」（目标城市、岗位方向、技能、薪资期望），或调整关键词/平台过滤规则，然后重新搜索。</p>';
+    el.innerHTML=(jobs&&jobs.length)
+      ?'<p style="color:#8b949e;line-height:2">😕 当前筛选平台下没有岗位，试试「全部平台」。</p>'
+      :'<p style="color:#8b949e;line-height:2">😕 没有找到符合条件的岗位'+
+        (parts.length?'（'+parts.join('、')+'）':'')+'。<br>'+
+        '建议：完善「意向描述」（目标城市、岗位方向、技能、薪资期望），或调整关键词/平台过滤规则，然后重新搜索。</p>';
     document.getElementById('pager').style.display='none';
     return;
   }
-  const totalPages=Math.ceil(jobs.length/JOBS_PER_PAGE);
+  const totalPages=Math.ceil(visible.length/JOBS_PER_PAGE);
   if(jobPage>totalPages)jobPage=totalPages;
   const start=(jobPage-1)*JOBS_PER_PAGE;
-  const pageJobs=jobs.slice(start,start+JOBS_PER_PAGE);
+  const pageJobs=visible.slice(start,start+JOBS_PER_PAGE);
   el.innerHTML=pageJobs.map((j,idx)=>{
     const i=start+idx;  // 全局下标，投递/记录用
     const breakdown=j.score_breakdown||{};
@@ -647,7 +674,7 @@ function renderJobs(jobs, summary){
     </div>
   </div>`;
   }).join('');
-  renderPager(jobs.length);
+  renderPager(visible.length);
 }
 function renderPager(total){
   const p=document.getElementById('pager');
@@ -655,7 +682,7 @@ function renderPager(total){
   p.style.display='block';
   p.innerHTML=`<button class=btn-sm onclick=prevPage() ${jobPage<=1?'disabled':''}>← 上一页</button>`+
     `<span style="margin:0 12px;color:#8b949e">第 ${jobPage} / ${pages} 页 · 共 ${total} 个岗位</span>`+
-    `<button class=btn-sm onclick=nextPage() ${jobPage>=pages?'disabled':''}>换一批 →</button>`;
+    `<button class=btn-sm onclick=nextPage() ${jobPage>=pages?'disabled':''}>下一页 →</button>`;
 }
 function prevPage(){
   if(jobPage>1){jobPage--;renderJobs(window._lastJobs||[]);}
