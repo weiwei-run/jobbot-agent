@@ -191,7 +191,6 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
   </h3>
   <div id=profile-guide class="hidden" style="background:var(--bg);border:1px dashed var(--warn);border-radius:8px;padding:12px;margin-bottom:12px"></div>
   <div id=search-warnings></div>
-  <div id=kw-box class=row style="margin-top:0"></div>
   <div class=filters id=job-platform-filters style="margin-bottom:8px"></div>
   <div id=job-list></div>
   <div id=pager style="display:none;text-align:center;margin:14px 0"></div>
@@ -550,7 +549,6 @@ async function runSearch(){
   }catch(e){btn.disabled=false;toast('❌ 搜索启动失败');st.textContent='❌ 搜索启动失败';hideSearchOverlay();setTimeout(()=>st.classList.add('hidden'),8000);}
 }
 function renderSearchResult(d){
-  document.getElementById('kw-box').innerHTML=(d.keywords||[]).map(k=>`<span class=kw>${esc(k)}</span>`).join('')||'';
   document.getElementById('search-warnings').innerHTML=(d.warnings||[]).map(w=>`<div class=warn-line>⚠ ${esc(w)}</div>`).join('');
   const kws=(d.keywords||[]).filter(Boolean);
   if(kws.length){

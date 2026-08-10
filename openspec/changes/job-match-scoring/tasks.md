@@ -62,3 +62,7 @@
 ## 9. 第三轮反馈（遮罩显示异常）
 
 - [x] 9.1 修复搜索遮罩启动即常驻：`#search-overlay{display:flex}`（ID 优先级）覆盖了 `.hidden{display:none}`，新增 `#search-overlay.hidden{display:none}` 显式覆盖，并排查确认无其他同类冲突
+
+## 10. 第四轮反馈（UI 精简）
+
+- [x] 10.1 移除搜索结果中的关键词标签行（`kw-box`），保留黄色「更换关键词示例：…」文字行
