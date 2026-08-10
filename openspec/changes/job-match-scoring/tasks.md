@@ -58,3 +58,7 @@
 - [x] 8.3 「加入记录」默认状态改为 `applied`（先投递、后记录），提示文案同步为「已加入记录（已投递）」
 - [x] 8.4 清理文档：`README.md` / `PRODUCT.md` / `start.py` / `TODO.md` / `openspec/config.yaml` 移除在线同步说明
 - [x] 8.5 新增 `online-sync` REMOVED delta 并更新 proposal/design；`openspec validate` 通过
+
+## 9. 第三轮反馈（遮罩显示异常）
+
+- [x] 9.1 修复搜索遮罩启动即常驻：`#search-overlay{display:flex}`（ID 优先级）覆盖了 `.hidden{display:none}`，新增 `#search-overlay.hidden{display:none}` 显式覆盖，并排查确认无其他同类冲突

@@ -87,6 +87,7 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
 #search-status.search-float{position:fixed;top:52px;right:16px;background:var(--card);border:1px solid var(--border);color:var(--fg);padding:8px 14px;border-radius:8px;font-size:12px;line-height:1.5;max-width:340px;z-index:98;box-shadow:0 4px 14px rgba(0,0,0,.45);pointer-events:none}
 /* 搜索进行中遮罩：全屏覆盖 + 居中进度面板，同时阻塞页面所有操作 */
 #search-overlay{position:fixed;inset:0;background:rgba(13,17,23,.78);z-index:999;display:flex;align-items:center;justify-content:center}
+#search-overlay.hidden{display:none}  /* ID 优先级高于 .hidden，必须显式覆盖才能默认隐藏 */
 #search-overlay .box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:28px 36px;max-width:480px;width:90%;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 #search-overlay .spinner{width:34px;height:34px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;margin:0 auto 14px;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
