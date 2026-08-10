@@ -96,3 +96,8 @@
   - 新增 `scripts/selftest_scoring.py`（8 项自测全过：提取/缺失字段/降级/档位边界/同义匹配/证据链/管道级过滤）
 - **验证**：`py_compile` 通过、`openspec validate` 7 项全过；真实画像提取正常（学历/专业/8 项技能/2 证书）；51job 真实搜索首次跑通（11 条），后续被临时限流返回 0，三平台实测待 Dashboard 验证
 - **注意**：深色模式推理模型（deepseek-v4-flash）对复杂 JSON prompt 可能把输出预算全耗在 reasoning 上，需显式"不要解释"并调大 max_tokens；51job 高频搜索会触发临时限流
+
+### 补充（同日自测反馈修复）
+
+- 搜索进度提示此前从未显示：状态元素带 `hidden` 类但 JS 只改 `hidden` 属性，CSS `display:none` 常驻 → 改为全屏遮罩（步骤/详情/耗时）+ 阻塞页面操作
+- 「评分失败（LLM 调用异常）」根因：推理模型在长 JD 上 reasoning 占满 token 预算导致 content 为空/截断，4 路并发加剧网关异常 → 失败重试一次 + 并发 4→2 + max_tokens 8000 + JD 截断 5000

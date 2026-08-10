@@ -701,10 +701,10 @@ def analyze_job_match(jd_text: str, profile: dict) -> dict:
         "规则：semantic 表示同义等价（如 可编程控制器 ≈ PLC）；confidence 只允许 1.0/0.7/0；"
         "evidence 必须来自画像原文；不猜测 JD 没有的要求。\n"
         f"画像：{json.dumps(brief_profile, ensure_ascii=False)}\n"
-        f"JD 文本：{(jd_text or '')[:6000]}"
+        f"JD 文本：{(jd_text or '')[:5000]}"
     )
     return chat_json([{"role": "user", "content": prompt}], temperature=0.1,
-                     max_tokens=4000)
+                     max_tokens=8000)
 
 
 def compute_match_scores(analysis: dict, profile: dict, city: str) -> dict:
@@ -812,17 +812,29 @@ def precise_score_jobs(jobs: list[dict], profile: dict, city: str,
     """详情精排：读完整 JD 后结构化加权评分 0~100，并生成证据链。"""
     def _score_one(j: dict):
         jd_text = j.get("jd_text") or j.get("jd_summary") or ""
-        try:
-            analysis = analyze_job_match(jd_text, profile)
-            res = compute_match_scores(analysis, profile, city)
-            j.update(res)
-            j["score_failed"] = False
-        except Exception:
+        analysis = None
+        last_err = ""
+        # 推理模型偶发空响应/截断，重试一次可显著降低失败率
+        for _ in range(2):
+            try:
+                analysis = analyze_job_match(jd_text, profile)
+                break
+            except Exception as e:
+                last_err = str(e)[:120]
+        if analysis is not None:
+            try:
+                res = compute_match_scores(analysis, profile, city)
+                j.update(res)
+                j["score_failed"] = False
+            except Exception as e:
+                last_err = str(e)[:120]
+                analysis = None
+        if analysis is None:
             j["score"] = 60
             j["grade"] = "备选"
             j["score_breakdown"] = {}
             j["evidence"] = []
-            j["gaps"] = ["评分失败（LLM 调用异常），按备选档位展示"]
+            j["gaps"] = [f"评分失败（{last_err or 'LLM 调用异常'}），按备选档位展示"]
             j["reason"] = "评分失败，按备选档位展示（信息可能不完整）"
             j["score_failed"] = True
         j["star"] = _star(j.get("score", 0))
@@ -831,7 +843,7 @@ def precise_score_jobs(jobs: list[dict], profile: dict, city: str,
 
     if not jobs:
         return jobs
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=2) as ex:
         for idx, _ in enumerate(ex.map(_score_one, jobs), 1):
             _p(progress, "AI 精排", f"正在精排（{idx}/{len(jobs)}）")
     return jobs

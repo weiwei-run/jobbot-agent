@@ -131,6 +131,23 @@ def test_evidence_format():
     print("✓ 2.7d 证据链输出 + 满分场景总分 100")
 
 
+def test_analyze_retry():
+    calls = {"n": 0}
+
+    def flaky(jd, profile):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("LLM 返回非 JSON: （瞬时异常）")
+        return json.loads(json.dumps(GOOD_ANALYSIS))
+
+    engine.analyze_job_match = flaky
+    jobs = [{"jd_text": "JD 全文", "jd_summary": "卡片", "score": 5}]
+    engine.precise_score_jobs(jobs, PROFILE_FIELDS, "南京")
+    assert calls["n"] == 2                      # 失败后自动重试一次
+    assert jobs[0]["score"] == 100 and jobs[0]["score_failed"] is False
+    print("✓ 评分失败自动重试一次后成功")
+
+
 def _mk_job(platform, uid, company, position, url):
     return {"platform": platform, "platform_uid": uid, "company": company,
             "position": position, "salary": "100-200/天", "location": "南京-江宁区",
@@ -208,7 +225,7 @@ def test_pipeline():
 def main():
     tests = [test_profile_extraction, test_missing_fields, test_extract_failure_fallback,
              test_grade_star_boundaries, test_semantic_match, test_missing_required_skill,
-             test_evidence_format, test_pipeline]
+             test_evidence_format, test_analyze_retry, test_pipeline]
     for t in tests:
         t()
     print(f"\n全部 {len(tests)} 项自测通过")

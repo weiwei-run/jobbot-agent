@@ -86,6 +86,14 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
 #toast{position:fixed;top:16px;right:16px;background:var(--good);color:#000;padding:10px 20px;border-radius:6px;font-weight:600;z-index:99;transition:opacity .3s}
 /* 搜索进度悬浮提示：固定右上角、不拦截任何点击、搜索期间常驻、结束后自动收起 */
 #search-status.search-float{position:fixed;top:52px;right:16px;background:var(--card);border:1px solid var(--border);color:var(--fg);padding:8px 14px;border-radius:8px;font-size:12px;line-height:1.5;max-width:340px;z-index:98;box-shadow:0 4px 14px rgba(0,0,0,.45);pointer-events:none}
+/* 搜索进行中遮罩：全屏覆盖 + 居中进度面板，同时阻塞页面所有操作 */
+#search-overlay{position:fixed;inset:0;background:rgba(13,17,23,.78);z-index:999;display:flex;align-items:center;justify-content:center}
+#search-overlay .box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:28px 36px;max-width:480px;width:90%;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+#search-overlay .spinner{width:34px;height:34px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;margin:0 auto 14px;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#search-overlay .step{font-size:16px;font-weight:700;margin-bottom:6px}
+#search-overlay .detail{font-size:13px;color:#8b949e;line-height:1.7;word-break:break-all}
+#search-overlay .elapsed{font-size:12px;color:#8b949e;margin-top:10px}
 .job-card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px}
 .job-card .top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .job-card .pos{font-weight:600}.job-card .comp{color:#8b949e;font-size:12px}
@@ -111,6 +119,14 @@ label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:8p
 <h1>🤖 JobBot Agent</h1>
 <p class=sub>AI求职助手 · 本地运行 · 配置一次 LLM Key 即用 · 三大平台搜索/投递 · 在线表格同步</p>
 <div id=toast style=opacity:0></div>
+<div id=search-overlay class=hidden>
+  <div class=box>
+    <div class=spinner></div>
+    <div class=step id=overlay-step>正在搜索…</div>
+    <div class=detail id=overlay-detail></div>
+    <div class=elapsed id=overlay-time></div>
+  </div>
+</div>
 
 <section id=llm-section>
   <h3>🔑 第一步：配置 AI（LLM API Key）</h3>
@@ -361,6 +377,20 @@ function showLoginRequired(keys){
   renderLoginBox();
   document.getElementById('login-section').classList.remove('hidden');
 }
+function showSearchOverlay(step, detail){
+  document.getElementById('overlay-step').textContent=step||'搜索中…';
+  document.getElementById('overlay-detail').textContent=detail||'';
+  document.getElementById('overlay-time').textContent='';
+  document.getElementById('search-overlay').classList.remove('hidden');
+}
+function updateSearchOverlay(step, detail, secs){
+  document.getElementById('overlay-step').textContent=step||'搜索中…';
+  document.getElementById('overlay-detail').textContent=detail||'';
+  document.getElementById('overlay-time').textContent='已耗时 '+secs+' 秒';
+}
+function hideSearchOverlay(){
+  document.getElementById('search-overlay').classList.add('hidden');
+}
 function renderLoginBox(){
   const box=document.getElementById('login-box');
   if(!loginPending.length){box.innerHTML='';document.getElementById('login-section').classList.add('hidden');return;}
@@ -516,12 +546,17 @@ async function runSearch(){
   const btn=document.querySelector('#search-section h3 button');
   btn.disabled=true;
   st.textContent='⏳ 正在启动搜索…';
-  st.hidden=false;
+  st.classList.remove('hidden');
+  showSearchOverlay('正在启动搜索…','');
   const t0=Date.now();
   try{
     const r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({intent,city})});
     const d=await r.json();
-    if(!d.ok){toast('❌ '+d.error);st.textContent='❌ '+d.error;setTimeout(()=>st.hidden=true,8000);btn.disabled=false;return;}
+    if(!d.ok){
+      toast('❌ '+d.error);st.textContent='❌ '+d.error;
+      hideSearchOverlay();
+      setTimeout(()=>st.classList.add('hidden'),8000);btn.disabled=false;return;
+    }
     // 轮询进度：实时显示正在做什么
     const timer=setInterval(async ()=>{
       try{
@@ -529,20 +564,26 @@ async function runSearch(){
         const s=await sr.json();
         const secs=Math.round((Date.now()-t0)/1000);
         st.textContent='⏳ '+esc(s.step||'搜索中')+'…（'+secs+'s）'+(s.detail?' · '+esc(s.detail):'');
+        updateSearchOverlay(s.step||'搜索中…', s.detail||'', secs);
         if(s.running)return;
         clearInterval(timer);
         btn.disabled=false;
-        if(s.error){st.textContent='❌ '+s.error;toast('❌ '+s.error);setTimeout(()=>st.hidden=true,8000);return;}
+        if(s.error){
+          st.textContent='❌ '+s.error;toast('❌ '+s.error);
+          hideSearchOverlay();
+          setTimeout(()=>st.classList.add('hidden'),8000);return;
+        }
+        hideSearchOverlay();
         renderSearchResult(s.result||{});
         const jobs=s.result&&s.result.jobs||[];
         const extra=[];
         if(s.result&&s.result.filtered)extra.push('已过滤 '+s.result.filtered+' 个不匹配/未核实岗位');
         if(s.result&&s.result.offline)extra.push('已过滤 '+s.result.offline+' 个已下线岗位');
         st.textContent=`共找到 ${jobs.length} 个匹配岗位${extra.length?'（'+extra.join('、')+'）':''}，点击「打开详情投递」自行查看并投递`;
-        setTimeout(()=>st.hidden=true,10000);
-      }catch(e){clearInterval(timer);btn.disabled=false;toast('❌ 搜索状态获取失败');st.textContent='❌ 搜索状态获取失败';setTimeout(()=>st.hidden=true,8000);}
+        setTimeout(()=>st.classList.add('hidden'),10000);
+      }catch(e){clearInterval(timer);btn.disabled=false;toast('❌ 搜索状态获取失败');st.textContent='❌ 搜索状态获取失败';hideSearchOverlay();setTimeout(()=>st.classList.add('hidden'),8000);}
     },1000);
-  }catch(e){btn.disabled=false;toast('❌ 搜索启动失败');st.textContent='❌ 搜索启动失败';setTimeout(()=>st.hidden=true,8000);}
+  }catch(e){btn.disabled=false;toast('❌ 搜索启动失败');st.textContent='❌ 搜索启动失败';hideSearchOverlay();setTimeout(()=>st.classList.add('hidden'),8000);}
 }
 function renderSearchResult(d){
   document.getElementById('kw-box').innerHTML=(d.keywords||[]).map(k=>`<span class=kw>${esc(k)}</span>`).join('')||'';
