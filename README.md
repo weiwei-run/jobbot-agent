@@ -4,6 +4,11 @@
 
 > 数据全部留在本地，只有调用 LLM 和搜索/投递岗位时需要联网。
 
+## 使用文档
+
+- [普通用户手册](docs/user-guide.md) —— 零基础从下载到投递的完整操作说明
+- [Agent 接入指南](docs/agent-guide.md) —— 装了 OpenCode / Codex / Claude Code / Cursor 等工具的人，用 agent 操作与维护 JobBot
+
 ---
 
 ## 它能做什么
